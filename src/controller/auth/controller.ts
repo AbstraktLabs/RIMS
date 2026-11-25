@@ -185,14 +185,19 @@ export async function refresh(refreshToken: string | undefined, requestedLocatio
   }
 
   const newRefresh = signRefreshToken({ userId: row.userId, sessionId: row.id });
-  await db
+  // Rotate only if nobody rotated it since we read it. Two tabs refreshing at the same
+  // moment both pass the check above; the loser gets a 401 but the session survives,
+  // and its retry carries the winner's cookie.
+  const rotated = await db
     .update(refreshTokens)
     .set({
       tokenHash: sha256(newRefresh),
       activeLocationId: session.claims.locationId,
       expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000),
     })
-    .where(eq(refreshTokens.id, row.id));
+    .where(and(eq(refreshTokens.id, row.id), eq(refreshTokens.tokenHash, row.tokenHash), isNull(refreshTokens.revokedAt)))
+    .returning({ id: refreshTokens.id });
+  if (!rotated.length) throw unauthorized("Session expired");
 
   return { accessToken: signAccessToken(session.claims), refreshToken: newRefresh, session };
 }

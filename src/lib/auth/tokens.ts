@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import jwt from "jsonwebtoken";
+
+const ALGORITHMS: jwt.Algorithm[] = ["HS256"];
 
 function secret(name: "ACCESS_TOKEN_SECRET" | "REFRESH_TOKEN_SECRET" | "SUPER_ADMIN_TOKEN_SECRET"): string {
   const value = process.env[name];
@@ -34,36 +37,41 @@ export interface SuperAdminClaims {
 
 export function signAccessToken(claims: AccessTokenClaims): string {
   return jwt.sign({ ...claims, typ: "access" }, secret("ACCESS_TOKEN_SECRET"), {
+    algorithm: "HS256",
     expiresIn: ACCESS_TOKEN_TTL_SECONDS,
   });
 }
 
 export function verifyAccessToken(token: string): AccessTokenClaims {
-  const decoded = jwt.verify(token, secret("ACCESS_TOKEN_SECRET")) as AccessTokenClaims & { typ?: string };
+  const decoded = jwt.verify(token, secret("ACCESS_TOKEN_SECRET"), { algorithms: ALGORITHMS }) as AccessTokenClaims & { typ?: string };
   if (decoded.typ !== "access") throw new Error("Invalid token type");
   return decoded;
 }
 
 export function signRefreshToken(claims: RefreshTokenClaims): string {
+  // jwtid makes every rotation produce a new token, even two within the same second
   return jwt.sign({ ...claims, typ: "refresh" }, secret("REFRESH_TOKEN_SECRET"), {
+    algorithm: "HS256",
     expiresIn: REFRESH_TOKEN_TTL_SECONDS,
+    jwtid: randomUUID(),
   });
 }
 
 export function verifyRefreshToken(token: string): RefreshTokenClaims {
-  const decoded = jwt.verify(token, secret("REFRESH_TOKEN_SECRET")) as RefreshTokenClaims & { typ?: string };
+  const decoded = jwt.verify(token, secret("REFRESH_TOKEN_SECRET"), { algorithms: ALGORITHMS }) as RefreshTokenClaims & { typ?: string };
   if (decoded.typ !== "refresh") throw new Error("Invalid token type");
   return decoded;
 }
 
 export function signSuperAdminToken(claims: SuperAdminClaims): string {
   return jwt.sign({ ...claims, typ: "platform" }, secret("SUPER_ADMIN_TOKEN_SECRET"), {
+    algorithm: "HS256",
     expiresIn: SUPER_ADMIN_TOKEN_TTL_SECONDS,
   });
 }
 
 export function verifySuperAdminToken(token: string): SuperAdminClaims {
-  const decoded = jwt.verify(token, secret("SUPER_ADMIN_TOKEN_SECRET")) as SuperAdminClaims & { typ?: string };
+  const decoded = jwt.verify(token, secret("SUPER_ADMIN_TOKEN_SECRET"), { algorithms: ALGORITHMS }) as SuperAdminClaims & { typ?: string };
   if (decoded.typ !== "platform") throw new Error("Invalid token type");
   return decoded;
 }

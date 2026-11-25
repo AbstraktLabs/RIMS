@@ -58,16 +58,27 @@ async function parse(res: Response) {
   }
 }
 
+async function withRefreshLock(fn: () => Promise<Response>): Promise<Response> {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  return locks ? await locks.request("rims-auth-refresh", fn) : fn();
+}
+
 /** Rotates the refresh cookie and returns a fresh session. Concurrent callers share one request. */
 export function refreshSession(locationId?: string): Promise<SessionPayload> {
   if (refreshing && !locationId) return refreshing;
-  const p = (async () => {
-    const res = await fetch(locationId ? "/api/auth/switch-location" : "/api/auth/refresh", {
+  const send = () =>
+    fetch(locationId ? "/api/auth/switch-location" : "/api/auth/refresh", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(locationId ? { locationId } : {}),
       credentials: "same-origin",
     });
+  const p = (async () => {
+    // Tabs share one refresh cookie, and each refresh replaces it. Take turns across
+    // tabs so a second tab sends the cookie the first one just received.
+    let res = await withRefreshLock(send);
+    // A tab without lock support can still lose a race; the cookie is fresh by now.
+    if (res.status === 401) res = await withRefreshLock(send);
     const body = await parse(res);
     if (!res.ok) {
       if (!locationId) accessToken = null;

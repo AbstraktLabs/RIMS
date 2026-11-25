@@ -124,9 +124,11 @@ export default function DashboardPage() {
                 accent="green"
                 icon={TrendingUp}
                 hint={
-                  k.month.netRevenue
-                    ? `${((k.month.grossProfit / k.month.netRevenue) * 100).toFixed(1)}% margin on ${fmt.moneyShort(k.month.netRevenue)}`
-                    : "No sales yet this month"
+                  (k.month.netRevenue ?? 0) > 0
+                    ? `${((k.month.grossProfit / k.month.netRevenue!) * 100).toFixed(1)}% margin on ${fmt.moneyShort(k.month.netRevenue!)}`
+                    : k.month.sales
+                      ? `Net sales ${fmt.moneyShort(k.month.netRevenue ?? 0)} after returns`
+                      : "No sales yet this month"
                 }
                 href={`${base}/reports/profit-loss`}
               />

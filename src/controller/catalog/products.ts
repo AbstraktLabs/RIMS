@@ -675,7 +675,17 @@ export async function lookupByCode(auth: AuthContext, q: z.infer<typeof lookupQu
 }
 
 /** In-stock serials for a variant at a location (for picking at the till). */
+/** 404 unless the variant belongs to the caller's business. */
+async function assertOwnVariant(auth: AuthContext, variantId: string) {
+  const v = await db.query.productVariants.findFirst({
+    where: and(eq(productVariants.id, variantId), eq(productVariants.organizationId, auth.organizationId)),
+    columns: { id: true },
+  });
+  if (!v) throw notFound("Product");
+}
+
 export async function availableSerials(auth: AuthContext, variantId: string, locationId?: string) {
+  await assertOwnVariant(auth, variantId);
   const loc = locationId ? await resolveLocationId(db, auth, locationId) : auth.locationId;
   const rows = await db
     .select({ serialNumber: serialNumbers.serialNumber, warrantyEndsOn: serialNumbers.warrantyEndsOn })
@@ -694,6 +704,7 @@ export async function availableSerials(auth: AuthContext, variantId: string, loc
 }
 
 export async function variantLots(auth: AuthContext, variantId: string, locationId?: string) {
+  await assertOwnVariant(auth, variantId);
   const loc = locationId ? await resolveLocationId(db, auth, locationId) : (auth.locationId ?? undefined);
   const lots = await sellableLots(auth.organizationId, [variantId], loc);
   return { items: lots.map((l) => ({ ...l, quantityAvailable: num(l.quantityAvailable), unitCost: num(l.unitCost) })) };

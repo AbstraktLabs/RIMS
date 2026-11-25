@@ -11,8 +11,22 @@ export interface RateLimitOptions {
   windowSeconds: number;
 }
 
+// Local test runs may switch off named limits (e.g. RATE_LIMIT_SKIP=register) so an
+// end-to-end suite can create many tenants. Never honoured in production.
+const skipped = new Set(
+  process.env.NODE_ENV === "production"
+    ? []
+    : (process.env.RATE_LIMIT_SKIP ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+);
+
+function pruneMemory(now: number) {
+  if (memory.size < 10_000) return;
+  for (const [k, v] of memory) if (v.resetAt < now) memory.delete(k);
+}
+
 /** Counts an attempt; throws 429 once the limit is exceeded within the window. */
 export async function enforceRateLimit({ scope, identifier, limit, windowSeconds }: RateLimitOptions) {
+  if (skipped.has(scope)) return;
   const key = `rims:ratelimit:${scope}:${identifier.toLowerCase()}`;
   let count: number;
   let retryAfter = windowSeconds;
@@ -24,6 +38,7 @@ export async function enforceRateLimit({ scope, identifier, limit, windowSeconds
     if (ttl > 0) retryAfter = ttl;
   } else {
     const now = Date.now();
+    pruneMemory(now);
     const entry = memory.get(key);
     if (!entry || entry.resetAt < now) {
       memory.set(key, { count: 1, resetAt: now + windowSeconds * 1000 });
@@ -48,6 +63,18 @@ export async function resetRateLimit(scope: string, identifier: string) {
   if (redisReady()) await redis!.del(key).catch(() => undefined);
 }
 
+/**
+ * The caller's IP for rate limiting. Proxies append to X-Forwarded-For, so only the
+ * entries they added can be trusted; anything to their left was sent by the client and
+ * could be made up to dodge a limit. TRUSTED_PROXY_COUNT is how many proxies sit in
+ * front of the app (default 1); the client IP is that many entries from the right.
+ */
 export function clientIp(req: NextRequest): string {
-  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "unknown";
+  const hops = Math.max(1, Number(process.env.TRUSTED_PROXY_COUNT ?? 1) || 1);
+  const chain = (req.headers.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (chain.length) return chain[Math.max(0, chain.length - hops)];
+  return req.headers.get("x-real-ip")?.trim() || "unknown";
 }

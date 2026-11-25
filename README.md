@@ -30,6 +30,32 @@ pnpm dev
 Use a **dedicated** database for RIMS — never point `DATABASE_URL` at the
 Pharmacy IMS database.
 
+## Testing
+
+`pnpm test:e2e` runs the end-to-end API suites in `tests/e2e/` against a running
+server. They sign up throwaway businesses and post real documents, so use a
+**separate, empty database** — never one with real data. The runner refuses any
+host other than localhost unless `E2E_ALLOW_REMOTE=1`.
+
+```bash
+# terminal 1 — a dev server on a throwaway database
+DATABASE_URL=postgresql://USER@localhost:5432/rims_test RATE_LIMIT_SKIP=register,login-ip pnpm dev
+# terminal 2
+E2E_BASE_URL=http://localhost:3000 pnpm test:e2e          # all suites
+E2E_BASE_URL=http://localhost:3000 pnpm test:e2e hardening  # one suite
+```
+
+| Suite | Covers |
+|---|---|
+| `core` | Sign-up, settings, catalogue, purchases, POS (decimal, serial, split tender), credit limits, returns, ledger, adjustments, transfers, reports, read-only staff, tenant isolation |
+| `documents` | PO → partial receipt, payment voids, purchase returns, voids, store credit, outstanding |
+| `integration` | Dashboard counts vs stock filters, reorder suggestions, product links on document lines |
+| `hardening` | Token tampering, refresh-token replay and the two-tab race, login throttling, spoofed `X-Forwarded-For`, Manager/Viewer permissions, deactivated staff, concurrent sales of the last unit, gap-free numbering under load, bad input, suspended and expired-trial shops |
+| `isolation` | Every route that takes an id, called by another business: all must answer 404 and change nothing |
+
+The suspended / expired-trial checks need a local test super admin: set
+`E2E_PLATFORM_EMAIL` and `E2E_PLATFORM_PASSWORD` (they are skipped otherwise).
+
 ## Database design
 
 All schema lives in `src/db/schema/`, one file per domain.
