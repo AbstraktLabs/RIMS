@@ -9,6 +9,7 @@ import {
   index,
   uniqueIndex,
   primaryKey,
+  timestamp,
   check,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
@@ -19,6 +20,7 @@ import { parties } from "./parties";
 import { sales, saleReturns } from "./sales";
 import { purchases, purchaseReturns } from "./purchases";
 import {
+  documentStatusEnum,
   documentTypeEnum,
   financeEntryKindEnum,
   paymentDirectionEnum,
@@ -48,6 +50,10 @@ export const payments = pgTable(
     method: paymentMethodEnum("method").notNull().default("CASH"),
     referenceNumber: varchar("reference_number", { length: 100 }), // cheque no., txn id
     notes: text("notes"),
+    // payments are voided (never deleted) — e.g. when their sale/purchase is voided
+    status: documentStatusEnum("status").notNull().default("POSTED"),
+    voidedAt: timestamp("voided_at", { withTimezone: true }),
+    voidedByUserId: uuid("voided_by_user_id").references(() => users.id, { onDelete: "set null" }),
     createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },

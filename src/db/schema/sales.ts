@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, date, timestamp, boolean, index, uniqueIndex, check, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, date, timestamp, boolean, index, uniqueIndex, check, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createdAt, money, percent, qty, unitCost, updatedAt } from "./_columns";
 import { organizations, locations } from "./tenancy";
@@ -160,6 +160,8 @@ export const saleReturnItems = pgTable(
     unitCost: unitCost("unit_cost").notNull().default("0"),
     condition: returnConditionEnum("condition").notNull().default("RESELLABLE"),
     restocked: boolean("restocked").notNull().default(true), // false for damaged goods
+    // serial numbers involved (serial-tracked products only)
+    serialNumbers: jsonb("serial_numbers").$type<string[]>().notNull().default([]),
   },
   (t) => [
     index("sale_return_items_return_idx").on(t.saleReturnId),

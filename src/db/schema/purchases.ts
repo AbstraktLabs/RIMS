@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, date, timestamp, index, uniqueIndex, check, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, date, timestamp, index, uniqueIndex, check, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createdAt, money, percent, qty, unitCost, updatedAt } from "./_columns";
 import { organizations, locations } from "./tenancy";
@@ -219,6 +219,8 @@ export const purchaseReturnItems = pgTable(
     taxRate: percent("tax_rate").notNull().default("0"),
     taxAmount: money("tax_amount").notNull().default("0"),
     lineTotal: money("line_total").notNull(),
+    // serial numbers involved (serial-tracked products only)
+    serialNumbers: jsonb("serial_numbers").$type<string[]>().notNull().default([]),
   },
   (t) => [
     index("purchase_return_items_return_idx").on(t.purchaseReturnId),

@@ -7,7 +7,7 @@ import {
   timestamp,
   index,
   uniqueIndex,
-  check, type AnyPgColumn,
+  check, jsonb, type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createdAt, money, qty, unitCost, updatedAt } from "./_columns";
@@ -212,6 +212,8 @@ export const stockAdjustmentItems = pgTable(
     lotNumber: varchar("lot_number", { length: 100 }),
     manufacturingDate: date("manufacturing_date"),
     expiryDate: date("expiry_date"),
+    // serial numbers involved (serial-tracked products only)
+    serialNumbers: jsonb("serial_numbers").$type<string[]>().notNull().default([]),
     note: text("note"),
   },
   (t) => [
@@ -265,6 +267,8 @@ export const stockTransferItems = pgTable(
     destinationLotId: uuid("destination_lot_id").references(() => stockLots.id, { onDelete: "set null" }),
     quantity: qty("quantity").notNull(),
     unitCost: unitCost("unit_cost").notNull().default("0"), // filled when dispatched
+    // serial numbers involved (serial-tracked products only)
+    serialNumbers: jsonb("serial_numbers").$type<string[]>().notNull().default([]),
   },
   (t) => [
     index("stock_transfer_items_transfer_idx").on(t.transferId),
