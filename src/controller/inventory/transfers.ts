@@ -272,6 +272,7 @@ export async function getTransfer(auth: AuthContext, id: string) {
       id: stockTransferItems.id,
       variantId: stockTransferItems.variantId,
       displayName: sql<string>`case when ${productVariants.isDefault} then ${products.name} else ${products.name} || ' (' || ${productVariants.name} || ')' end`,
+      productId: productVariants.productId,
       sku: productVariants.sku,
       unitCode: units.code,
       sourceLotId: stockTransferItems.sourceLotId,

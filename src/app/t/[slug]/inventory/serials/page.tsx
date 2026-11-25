@@ -9,12 +9,13 @@ import { LocationSelect } from "@/components/pickers";
 import { useList } from "@/lib/client/hooks";
 import { SERIAL_STATUS } from "@/lib/client/labels";
 import { useFmt, useSession } from "@/lib/client/session";
+import { ProductName } from "@/components/product-name";
 
 interface SerialRow {
   id: string;
   serialNumber: string;
   status: string;
-  displayName: string;
+  displayName: string; productId?: string;
   sku: string;
   locationName: string | null;
   warrantyEndsOn: string | null;
@@ -61,7 +62,7 @@ export default function SerialsPage() {
           empty={<EmptyState icon={Barcode} title="No serial numbers" description="Serials are recorded when you receive serial-tracked products." />}
           columns={[
             { key: "s", header: "Serial", cell: (r) => <span className="font-mono text-sm font-semibold text-slate-800">{r.serialNumber}</span> },
-            { key: "p", header: "Product", cell: (r) => <div><div className="text-slate-800">{r.displayName}</div><div className="text-xs text-slate-400">{r.sku}</div></div> },
+            { key: "p", header: "Product", cell: (r) => <div><ProductName productId={r.productId} name={r.displayName} className="text-slate-800" /><div className="text-xs text-slate-400">{r.sku}</div></div> },
             { key: "st", header: "Status", cell: (r) => { const s = SERIAL_STATUS[r.status] ?? { label: r.status, tone: "slate" as const }; return <Badge tone={s.tone}>{s.label}</Badge>; } },
             ...(settings.enableMultiLocation ? [{ key: "l", header: "Location", hideBelow: "md" as const, cell: (r: SerialRow) => r.locationName ?? "—" }] : []),
             { key: "w", header: "Warranty until", hideBelow: "lg", cell: (r) => (r.warrantyEndsOn ? date(r.warrantyEndsOn) : "—") },

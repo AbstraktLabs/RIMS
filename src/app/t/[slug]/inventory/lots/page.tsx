@@ -9,10 +9,11 @@ import { LocationSelect } from "@/components/pickers";
 import { useList } from "@/lib/client/hooks";
 import { ExpiryBadge } from "@/components/stock-pickers";
 import { useFmt, useSession } from "@/lib/client/session";
+import { ProductName } from "@/components/product-name";
 
 interface LotRow {
   id: string;
-  displayName: string;
+  displayName: string; productId?: string;
   sku: string;
   unitCode: string;
   locationName: string;
@@ -34,8 +35,8 @@ export default function LotsPage() {
   const params = useSearchParams();
   const list = useList<LotRow, { search: string; locationId: string; status: string; expiringWithinDays: string }>("/api/inventory/lots", {
     search: params.get("search") ?? "",
-    locationId: "all",
-    status: params.get("expiring") ? "ACTIVE" : "",
+    locationId: params.get("locationId") ?? "all",
+    status: params.get("status") ?? (params.get("expiring") ? "ACTIVE" : ""),
     expiringWithinDays: params.get("expiring") ?? "",
   });
   const { filters: f, set } = list;
@@ -90,7 +91,7 @@ export default function LotsPage() {
           rowKey={(r) => r.id}
           empty={<EmptyState icon={Layers} title="No batches" description="Batches are created when you receive batch-tracked products." />}
           columns={[
-            { key: "p", header: "Product", cell: (r) => <div><div className="font-semibold text-slate-800">{r.displayName}</div><div className="text-xs text-slate-400">{r.sku}</div></div> },
+            { key: "p", header: "Product", cell: (r) => <div><ProductName productId={r.productId} name={r.displayName} /><div className="text-xs text-slate-400">{r.sku}</div></div> },
             { key: "b", header: "Batch", cell: (r) => <span className="font-mono text-xs">{r.lotNumber ?? "—"}</span> },
             ...(settings.enableExpiryTracking
               ? [

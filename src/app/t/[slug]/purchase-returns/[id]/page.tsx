@@ -16,10 +16,11 @@ import { useAction, useApi } from "@/lib/client/hooks";
 import { PAYMENT_METHOD_LABELS } from "@/lib/client/labels";
 import { useFmt, useSession } from "@/lib/client/session";
 import { PAYMENT_METHODS } from "@/lib/client/types";
+import { ProductName } from "@/components/product-name";
 
 interface RItem {
   id: string;
-  displayName: string;
+  displayName: string; productId?: string;
   sku: string;
   unitCode: string;
   trackBatches: boolean;
@@ -125,7 +126,7 @@ export default function PurchaseReturnPage({ params }: { params: Promise<{ id: s
                 {r.items.map((i) => (
                   <tr key={i.id} className="align-top">
                     <td className="px-4 py-3 sm:pl-5">
-                      <div className="font-semibold text-slate-800">{i.displayName}</div>
+                      <ProductName productId={i.productId} name={i.displayName} />
                       <div className="text-xs text-slate-400">
                         {i.sku}
                         {i.lotNumber && ` · Batch ${i.lotNumber}`}

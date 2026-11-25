@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, Printer } from "lucide-react";
 import { PrintHeader } from "@/components/print-header";
 import { SearchInput } from "@/components/ui/form";
@@ -38,7 +38,8 @@ export default function OutstandingPage() {
   const { base } = useSession();
   const { money, date } = useFmt();
   const router = useRouter();
-  const list = useList<Row, { type: "receivables" | "payables"; search: string }>("/api/finance/outstanding", { type: "receivables", search: "" });
+  const initialType = useSearchParams().get("type") === "payables" ? "payables" : "receivables";
+  const list = useList<Row, { type: "receivables" | "payables"; search: string }>("/api/finance/outstanding", { type: initialType, search: "" });
   const { filters: f, set } = list;
   const sum = list.data?.summary as Summary | undefined;
   const recv = f.type === "receivables";

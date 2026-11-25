@@ -1,9 +1,9 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Boxes, Coins, Package, Tags } from "lucide-react";
+import { Boxes, Coins, Package, PackagePlus, Tags } from "lucide-react";
 import { FilterSelect, SearchInput } from "@/components/ui/form";
-import { EmptyState, PageHeader, StatCard, StatusBadge } from "@/components/ui/primitives";
+import { EmptyState, LinkButton, PageHeader, StatCard, StatusBadge } from "@/components/ui/primitives";
 import { DataTable, Pagination, TableCard } from "@/components/ui/table";
 import { LocationSelect } from "@/components/pickers";
 import { useApi, useList } from "@/lib/client/hooks";
@@ -28,14 +28,14 @@ interface StockRow {
 }
 
 export default function StockPage() {
-  const { base, settings, can } = useSession();
+  const { base, settings, can, readOnly } = useSession();
   const { money, qty, num } = useFmt();
   const router = useRouter();
   const params = useSearchParams();
   const cats = useApi<{ items: { id: string; name: string }[] }>("/api/categories");
   const list = useList<StockRow, { search: string; locationId: string; categoryId: string; status: string; sort: string }>("/api/inventory/stock", {
     search: "",
-    locationId: "all",
+    locationId: params.get("locationId") ?? "all",
     categoryId: "",
     status: params.get("status") ?? "",
     sort: "name",
@@ -46,8 +46,23 @@ export default function StockPage() {
 
   return (
     <div>
-      <PageHeader title="Stock on hand" subtitle="Current quantity and value of everything you hold" />
-      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <PageHeader
+        title="Stock on hand"
+        subtitle="Current quantity and value of everything you hold"
+        actions={
+          can("purchases.manage") &&
+          !readOnly && (
+            <LinkButton
+              variant="secondary"
+              icon={PackagePlus}
+              href={`${base}/purchase-orders/new?reorder=1${f.locationId && f.locationId !== "all" ? `&locationId=${f.locationId}` : ""}`}
+            >
+              Reorder low stock
+            </LinkButton>
+          )
+        }
+      />
+      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard label="Units on hand" value={summary ? num(summary.totalQuantity, 0) : "—"} icon={Boxes} />
         {showCost && <StatCard label="Value at cost" value={summary ? money(summary.costValue) : "—"} icon={Coins} accent="green" />}
         <StatCard label="Value at selling price" value={summary ? money(summary.retailValue) : "—"} icon={Tags} accent="amber" />

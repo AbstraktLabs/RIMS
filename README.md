@@ -61,7 +61,10 @@ change. `stock_adjustments` cover opening stock, counts, damage and loss;
 `stock_transfers` move stock between locations.
 
 **Purchasing.** `purchase_orders` (no stock effect) → `purchases` (supplier bill +
-goods received, increases stock) → `purchase_returns`.
+goods received, increases stock) → `purchase_returns`. Reorder suggestions
+(`GET /api/products/reorder`) list active items at or below their low-stock level at
+a location and suggest enough to reach twice that level, less what is already on
+sent orders; the purchase-order form and the stock page use them.
 
 **Sales.** `sales` (POS receipts and invoices; walk-in customers allowed) with
 per-line cost snapshots for cost-of-goods-sold, and `sale_returns` (resellable or

@@ -1,17 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Save, Send } from "lucide-react";
+import { PackagePlus, Save, Send } from "lucide-react";
 import { TotalsBox } from "@/components/doc";
 import { LocationSelect, PartySelect } from "@/components/pickers";
-import { PurchaseLines, newLine, orderItem, purchaseTotals, type PLine } from "@/components/purchase-lines";
+import { PurchaseLines, fromSearch, newLine, orderItem, purchaseTotals, type PLine } from "@/components/purchase-lines";
 import { Field, FormGrid, Input, Textarea, Toggle } from "@/components/ui/form";
 import { Alert, Button, Card, CardHeader } from "@/components/ui/primitives";
-import { post, put } from "@/lib/client/api";
+import { useToast } from "@/components/ui/toast";
+import { get, post, put } from "@/lib/client/api";
 import { todayIso } from "@/lib/client/format";
 import { useAction } from "@/lib/client/hooks";
 import { useFmt, useSession } from "@/lib/client/session";
+import type { SearchVariant } from "@/lib/client/types";
+
+type ReorderItem = SearchVariant & { suggestedQuantity: number; onOrder: number; lowStockThreshold: number | null };
 
 export interface PurchaseOrder {
   id: string;
@@ -36,7 +40,7 @@ export interface PurchaseOrder {
   items: {
     id: string;
     variantId: string;
-    displayName: string;
+    displayName: string; productId?: string;
     sku: string;
     unitCode: string;
     trackBatches: boolean;
@@ -58,9 +62,11 @@ export function PurchaseOrderForm({ order }: { order?: PurchaseOrder }) {
   const { base, session, settings } = useSession();
   const { money } = useFmt();
   const router = useRouter();
-  const initialParty = useSearchParams().get("partyId");
+  const params = useSearchParams();
+  const initialParty = params.get("partyId");
+  const toast = useToast();
   const [partyId, setPartyId] = useState(order?.partyId ?? initialParty ?? "");
-  const [locationId, setLocationId] = useState(order?.locationId ?? session.activeLocationId);
+  const [locationId, setLocationId] = useState(order?.locationId ?? params.get("locationId") ?? session.activeLocationId);
   const [orderDate, setOrderDate] = useState(order?.orderDate ?? todayIso(settings.timezone));
   const [expectedDate, setExpectedDate] = useState(order?.expectedDate ?? "");
   const [inclusive, setInclusive] = useState(order ? order.taxMode === "INCLUSIVE" : settings.pricesIncludeTax);
@@ -76,6 +82,44 @@ export function PurchaseOrderForm({ order }: { order?: PurchaseOrder }) {
     ),
   );
   const [sending, setSending] = useState(false);
+  const [reordering, setReordering] = useState(false);
+  const [suggested, setSuggested] = useState(false);
+
+  const addLowStock = async () => {
+    setReordering(true);
+    try {
+      const r = await get<{ items: ReorderItem[] }>("/api/products/reorder", { locationId });
+      const have = new Set(lines.map((l) => l.v.variantId));
+      const fresh = r.items.filter((i) => i.suggestedQuantity > 0 && !have.has(i.variantId));
+      if (!fresh.length) {
+        toast(r.items.length ? "Everything running low is already on this order or on a sent order" : "Nothing is running low at this location");
+        return;
+      }
+      setLines((ls) => [
+        ...ls,
+        ...fresh.map((i) => {
+          const v = fromSearch(i);
+          const packs = v.purchaseUnitId && v.purchaseUnitFactor ? Math.ceil(i.suggestedQuantity / v.purchaseUnitFactor) : null;
+          return newLine(v, { quantity: String(packs ?? i.suggestedQuantity) });
+        }),
+      ]);
+      setSuggested(true);
+      toast(`Added ${fresh.length} item${fresh.length === 1 ? "" : "s"} running low`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not load items running low", "error");
+    } finally {
+      setReordering(false);
+    }
+  };
+
+  // opened from "Reorder" on the stock page: fill the order straight away
+  const autoReorder = useRef(!order && params.get("reorder") === "1");
+  useEffect(() => {
+    if (!autoReorder.current) return;
+    autoReorder.current = false;
+    void addLowStock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const { busy, error, run } = useAction();
   const taxMode = inclusive ? "INCLUSIVE" : "EXCLUSIVE";
   const { totals, error: totalsError } = useMemo(() => purchaseTotals(lines, { taxMode, discount, otherCharges }), [lines, taxMode, discount, otherCharges]);
@@ -126,7 +170,15 @@ export function PurchaseOrderForm({ order }: { order?: PurchaseOrder }) {
       </Card>
       <Card padded={false}>
         <div className="p-4 sm:p-5">
-          <CardHeader title="Items to order" />
+          <CardHeader
+            title="Items to order"
+            subtitle={suggested ? "Suggested quantities bring each item to twice its low-stock level, less what is already on order. Change them as needed." : undefined}
+            actions={
+              <Button size="sm" variant="secondary" icon={PackagePlus} loading={reordering} onClick={addLowStock}>
+                Add items running low
+              </Button>
+            }
+          />
         </div>
         <PurchaseLines lines={lines} setLines={setLines} mode="order" locationId={locationId} />
       </Card>

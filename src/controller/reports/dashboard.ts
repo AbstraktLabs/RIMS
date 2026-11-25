@@ -34,18 +34,12 @@ export async function dashboard(auth: AuthContext, q: z.infer<typeof dashboardQu
         (select coalesce(sum(sl.quantity * sl.avg_cost), 0) from stock_levels sl where sl.organization_id = ${c.orgId} ${c.loc(sql`sl.location_id`)}) as stock_value,
         (select coalesce(sum(sl.quantity * v.selling_price), 0) from stock_levels sl join product_variants v on v.id = sl.variant_id
            where sl.organization_id = ${c.orgId} ${c.loc(sql`sl.location_id`)}) as retail_value,
-        (select count(*) from (
-           select v.id, coalesce(sum(sl.quantity), 0) as q, max(${threshold}) as t
-             from product_variants v join products pr on pr.id = v.product_id
-             left join stock_levels sl on sl.variant_id = v.id ${c.loc(sql`sl.location_id`)}
-            where v.organization_id = ${c.orgId} and v.is_active and pr.is_active
-            group by v.id) x where x.q > 0 and x.t is not null and x.q <= x.t) as low_stock,
-        (select count(*) from (
-           select v.id, coalesce(sum(sl.quantity), 0) as q
-             from product_variants v join products pr on pr.id = v.product_id
-             left join stock_levels sl on sl.variant_id = v.id ${c.loc(sql`sl.location_id`)}
-            where v.organization_id = ${c.orgId} and v.is_active and pr.is_active
-            group by v.id) x where x.q <= 0) as out_of_stock,
+        (select count(*) from stock_levels sl join product_variants v on v.id = sl.variant_id join products pr on pr.id = v.product_id
+           where sl.organization_id = ${c.orgId} and v.is_active and pr.is_active ${c.loc(sql`sl.location_id`)}
+             and sl.quantity > 0 and ${threshold} is not null and sl.quantity <= ${threshold}) as low_stock,
+        (select count(*) from stock_levels sl join product_variants v on v.id = sl.variant_id join products pr on pr.id = v.product_id
+           where sl.organization_id = ${c.orgId} and v.is_active and pr.is_active ${c.loc(sql`sl.location_id`)}
+             and sl.quantity <= 0) as out_of_stock,
         (select count(*) from stock_lots l where l.organization_id = ${c.orgId} and l.quantity_available > 0
            and l.expiry_date between ${today} and ${addDays(today, c.settings.expiryAlertDays)} ${c.loc(sql`l.location_id`)}) as expiring_soon,
         (select count(*) from stock_lots l where l.organization_id = ${c.orgId} and l.quantity_available > 0

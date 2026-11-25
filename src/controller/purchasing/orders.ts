@@ -212,6 +212,7 @@ export async function getPurchaseOrder(auth: AuthContext, id: string) {
       id: purchaseOrderItems.id,
       variantId: purchaseOrderItems.variantId,
       displayName,
+      productId: productVariants.productId,
       sku: productVariants.sku,
       unitCode: units.code,
       trackBatches: products.trackBatches,

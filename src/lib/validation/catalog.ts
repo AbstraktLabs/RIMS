@@ -82,6 +82,10 @@ export const searchVariantsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
+export const reorderQuery = z.object({
+  locationId: uuid.optional(),
+});
+
 export const lookupQuery = z.object({
   code: z.string().trim().min(1).max(120),
   locationId: uuid.optional(),

@@ -22,6 +22,7 @@ import type {
   CreateProductInput,
   listProductsQuery,
   lookupQuery,
+  reorderQuery,
   searchVariantsQuery,
   VariantInput,
 } from "@/lib/validation/catalog";
@@ -577,6 +578,60 @@ export async function searchVariants(auth: AuthContext, q: z.infer<typeof search
   }
   const rows = (await baseVariantQuery(locationId, and(...conds), q.limit)).map(shapeVariant);
   return { items: rows, locationId: locationId ?? null };
+}
+
+/**
+ * Items at a location that are at or below their low-stock level (or sold out),
+ * with a suggested order quantity: enough to reach twice the low-stock level,
+ * less what is already on sent purchase orders for that location.
+ */
+export async function reorderSuggestions(auth: AuthContext, q: z.infer<typeof reorderQuery>) {
+  const locationId = await resolveLocationId(db, auth, q.locationId);
+  const threshold = sql`coalesce(${productVariants.lowStockThreshold}, ${products.lowStockThreshold})`;
+  const onHand = sql`(select sl.quantity from ${stockLevels} sl where sl.variant_id = ${qcol(productVariants.id)} and sl.location_id = ${locationId})`;
+  const rows = (
+    await baseVariantQuery(
+      locationId,
+      and(
+        eq(productVariants.organizationId, auth.organizationId),
+        eq(productVariants.isActive, true),
+        eq(products.isActive, true),
+        sql`${onHand} is not null and ${onHand} <= coalesce(${threshold}, 0)`,
+      ),
+      200,
+    )
+  ).map(shapeVariant);
+  if (!rows.length) return { items: [], locationId };
+
+  const extra = await db
+    .select({
+      variantId: productVariants.id,
+      threshold: sql<string | null>`${threshold}`,
+      onOrder: sql<string>`coalesce((
+        select sum(poi.quantity - poi.quantity_received)
+        from purchase_order_items poi
+        join purchase_orders po on po.id = poi.purchase_order_id
+        where poi.variant_id = ${qcol(productVariants.id)}
+          and po.organization_id = ${auth.organizationId}
+          and po.location_id = ${locationId}
+          and po.status in ('SENT', 'PARTIALLY_RECEIVED')
+      ), 0)`,
+    })
+    .from(productVariants)
+    .innerJoin(products, eq(products.id, productVariants.productId))
+    .where(inArray(productVariants.id, rows.map((r) => r.variantId)));
+  const byId = new Map(extra.map((e) => [e.variantId, e]));
+
+  const items = rows.map((r) => {
+    const e = byId.get(r.variantId);
+    const lowStockThreshold = e?.threshold == null ? null : num(e.threshold);
+    const onOrder = num(e?.onOrder ?? 0);
+    const target = lowStockThreshold && lowStockThreshold > 0 ? lowStockThreshold * 2 : 1;
+    let suggested = Math.max(target - Math.max(r.stock, 0) - onOrder, 0);
+    suggested = r.allowDecimal ? Math.round(suggested * 1000) / 1000 : Math.ceil(suggested);
+    return { ...r, lowStockThreshold, onOrder, suggestedQuantity: suggested };
+  });
+  return { items, locationId };
 }
 
 /** Exact barcode / SKU / serial-number match — what a scanner at the till sends. */

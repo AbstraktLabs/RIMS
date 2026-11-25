@@ -7,6 +7,7 @@ import { Badge, Button, Card, DetailList, ErrorState, LoadingBlock, PageHeader }
 import { useApi } from "@/lib/client/hooks";
 import { ADJUSTMENT_REASONS } from "@/lib/client/labels";
 import { useFmt, useSession } from "@/lib/client/session";
+import { ProductName } from "@/components/product-name";
 
 interface Adjustment {
   id: string;
@@ -20,7 +21,7 @@ interface Adjustment {
   createdAt: string;
   items: {
     id: string;
-    displayName: string;
+    displayName: string; productId?: string;
     sku: string;
     unitCode: string;
     lotNumber: string | null;
@@ -74,7 +75,7 @@ export default function AdjustmentPage({ params }: { params: Promise<{ id: strin
                 {a.items.map((i) => (
                   <tr key={i.id}>
                     <td className="px-4 py-3 sm:pl-5">
-                      <div className="font-semibold text-slate-800">{i.displayName}</div>
+                      <ProductName productId={i.productId} name={i.displayName} />
                       <div className="text-xs text-slate-400">{i.sku}</div>
                     </td>
                     <td className="px-3 py-3 text-xs text-slate-600">

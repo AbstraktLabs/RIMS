@@ -21,7 +21,7 @@ export interface ReceiptSale {
   paidAmount: number;
   amountTendered: number | null;
   changeGiven: number;
-  items: { id: string; displayName: string; quantity: number; unitPrice: number; discount: number; lineTotal: number; unitCode: string; serials?: string[] }[];
+  items: { id: string; displayName: string; productId?: string; quantity: number; unitPrice: number; discount: number; lineTotal: number; unitCode: string; serials?: string[] }[];
   payments: { id: string; amount: number; method: string; status: string }[];
 }
 

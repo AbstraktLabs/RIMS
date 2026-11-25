@@ -56,7 +56,7 @@ export default function SalesPage() {
           )
         }
       />
-      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard label="Sales in view" value={summary ? money(summary.totalAmount) : "—"} hint={list.data ? `${list.data.total} documents` : undefined} icon={Receipt} />
         <StatCard label="Collected" value={summary ? money(summary.totalPaid) : "—"} accent="green" />
         <StatCard label="Outstanding" value={summary ? money(summary.totalAmount - summary.totalPaid) : "—"} accent="amber" />

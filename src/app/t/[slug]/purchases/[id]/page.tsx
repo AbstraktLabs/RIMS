@@ -9,6 +9,7 @@ import { Alert, Badge, Button, Card, CardHeader, DetailList, ErrorState, LinkBut
 import { useApi } from "@/lib/client/hooks";
 import { PAYMENT_METHOD_LABELS } from "@/lib/client/labels";
 import { useFmt, useSession } from "@/lib/client/session";
+import { ProductName } from "@/components/product-name";
 
 interface Purchase {
   id: string;
@@ -40,7 +41,7 @@ interface Purchase {
   voidReason: string | null;
   items: {
     id: string;
-    displayName: string;
+    displayName: string; productId?: string;
     sku: string;
     unitCode: string;
     trackSerials: boolean;
@@ -135,7 +136,7 @@ export default function PurchasePage({ params }: { params: Promise<{ id: string 
                 {p.items.map((i) => (
                   <tr key={i.id} className="align-top">
                     <td className="px-4 py-3 sm:pl-5">
-                      <div className="font-semibold text-slate-800">{i.displayName}</div>
+                      <ProductName productId={i.productId} name={i.displayName} />
                       <div className="text-xs text-slate-400">
                         {i.sku}
                         {i.lotNumber && ` · Batch ${i.lotNumber}`}

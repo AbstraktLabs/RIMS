@@ -316,6 +316,7 @@ export async function getSale(auth: AuthContext, id: string) {
         id: saleItems.id,
         variantId: saleItems.variantId,
         displayName,
+        productId: productVariants.productId,
         sku: productVariants.sku,
         unitCode: units.code,
         trackSerials: products.trackSerials,

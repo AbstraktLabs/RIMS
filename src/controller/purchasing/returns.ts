@@ -319,6 +319,7 @@ export async function getPurchaseReturn(auth: AuthContext, id: string) {
         id: purchaseReturnItems.id,
         variantId: purchaseReturnItems.variantId,
         displayName,
+        productId: productVariants.productId,
         sku: productVariants.sku,
         unitCode: units.code,
         trackBatches: products.trackBatches,

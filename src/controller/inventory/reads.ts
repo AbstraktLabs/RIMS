@@ -45,10 +45,12 @@ export async function listStock(auth: AuthContext, q: z.infer<typeof stockQuery>
     q.categoryId ? eq(products.categoryId, q.categoryId) : undefined,
     variantSearch(q.search),
   ];
-  if (q.status === "out") conds.push(sql`${stockLevels.quantity} = 0`);
+  // "low" and "out" are what the dashboard counts: active items, per location, nothing left to sell
+  const active = sql`${productVariants.isActive} and ${products.isActive}`;
+  if (q.status === "out") conds.push(sql`${stockLevels.quantity} <= 0 and ${active}`);
   if (q.status === "negative") conds.push(sql`${stockLevels.quantity} < 0`);
   if (q.status === "in") conds.push(sql`${stockLevels.quantity} > 0`);
-  if (q.status === "low") conds.push(sql`${stockLevels.quantity} > 0 and ${threshold} is not null and ${stockLevels.quantity} <= ${threshold}`);
+  if (q.status === "low") conds.push(sql`${stockLevels.quantity} > 0 and ${threshold} is not null and ${stockLevels.quantity} <= ${threshold} and ${active}`);
   if (!q.status) {
     // hide empty rows of archived items
     conds.push(sql`(${stockLevels.quantity} <> 0 or (${productVariants.isActive} and ${products.isActive}))`);
@@ -162,6 +164,7 @@ export async function listLots(auth: AuthContext, q: z.infer<typeof lotsQuery>) 
         id: stockLots.id,
         variantId: stockLots.variantId,
         displayName,
+        productId: productVariants.productId,
         sku: productVariants.sku,
         unitCode: units.code,
         locationId: stockLots.locationId,
@@ -222,6 +225,7 @@ export async function listSerials(auth: AuthContext, q: z.infer<typeof serialsQu
         status: serialNumbers.status,
         variantId: serialNumbers.variantId,
         displayName,
+        productId: productVariants.productId,
         sku: productVariants.sku,
         locationId: serialNumbers.locationId,
         locationName: locations.name,

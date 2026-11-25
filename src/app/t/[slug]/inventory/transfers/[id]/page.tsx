@@ -9,6 +9,7 @@ import { useToast } from "@/components/ui/toast";
 import { post } from "@/lib/client/api";
 import { useAction, useApi } from "@/lib/client/hooks";
 import { useFmt, useSession } from "@/lib/client/session";
+import { ProductName } from "@/components/product-name";
 
 interface Transfer {
   id: string;
@@ -26,7 +27,7 @@ interface Transfer {
   createdAt: string;
   totalQuantity: number;
   totalValue: number;
-  items: { id: string; displayName: string; sku: string; unitCode: string; lotNumber: string | null; expiryDate: string | null; quantity: number; unitCost: number; serialNumbers: string[] }[];
+  items: { id: string; displayName: string; productId?: string; sku: string; unitCode: string; lotNumber: string | null; expiryDate: string | null; quantity: number; unitCost: number; serialNumbers: string[] }[];
 }
 
 type Action = "dispatch" | "receive" | "cancel";
@@ -104,7 +105,7 @@ export default function TransferPage({ params }: { params: Promise<{ id: string 
                 {t.items.map((i) => (
                   <tr key={i.id}>
                     <td className="px-4 py-3 sm:pl-5">
-                      <div className="font-semibold text-slate-800">{i.displayName}</div>
+                      <ProductName productId={i.productId} name={i.displayName} />
                       <div className="text-xs text-slate-400">{i.sku}</div>
                     </td>
                     <td className="px-3 py-3 text-xs text-slate-600">

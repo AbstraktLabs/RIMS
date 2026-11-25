@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toast";
 import { del, post } from "@/lib/client/api";
 import { useAction, useApi } from "@/lib/client/hooks";
 import { useFmt, useSession } from "@/lib/client/session";
+import { ProductName } from "@/components/product-name";
 
 type Act = { kind: "status"; status: "SENT" | "DRAFT" | "CANCELLED" | "RECEIVED" } | { kind: "delete" };
 
@@ -91,7 +92,7 @@ export default function PurchaseOrderPage({ params }: { params: Promise<{ id: st
                 {po.items.map((i) => (
                   <tr key={i.id}>
                     <td className="px-4 py-3 sm:pl-5">
-                      <div className="font-semibold text-slate-800">{i.displayName}</div>
+                      <ProductName productId={i.productId} name={i.displayName} />
                       <div className="text-xs text-slate-400">{i.sku}</div>
                     </td>
                     <td className="px-3 py-3 text-right">{qty(i.quantity, i.unitCode)}</td>

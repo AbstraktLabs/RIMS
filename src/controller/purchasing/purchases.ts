@@ -330,6 +330,7 @@ export async function getPurchase(auth: AuthContext, id: string) {
         id: purchaseItems.id,
         variantId: purchaseItems.variantId,
         displayName,
+        productId: productVariants.productId,
         sku: productVariants.sku,
         unitCode: units.code,
         trackSerials: products.trackSerials,

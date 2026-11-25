@@ -9,6 +9,7 @@ import { Alert, Badge, Button, Card, CardHeader, DetailList, ErrorState, Loading
 import { useApi } from "@/lib/client/hooks";
 import { PAYMENT_METHOD_LABELS } from "@/lib/client/labels";
 import { useFmt, useSession } from "@/lib/client/session";
+import { ProductName } from "@/components/product-name";
 
 interface SaleReturn {
   id: string;
@@ -16,6 +17,7 @@ interface SaleReturn {
   saleId: string;
   invoiceNumber: string;
   customerName: string;
+  partyId: string | null;
   returnDate: string;
   status: "POSTED" | "VOID";
   resolution: "REFUND" | "STORE_CREDIT";
@@ -26,7 +28,7 @@ interface SaleReturn {
   note: string | null;
   locationName: string;
   createdByName: string | null;
-  items: { id: string; displayName: string; sku: string; unitCode: string; quantity: number; unitPrice: number; taxAmount: number; lineTotal: number; condition: string; restocked: boolean; serialNumbers: string[] }[];
+  items: { id: string; displayName: string; productId?: string; sku: string; unitCode: string; quantity: number; unitPrice: number; taxAmount: number; lineTotal: number; condition: string; restocked: boolean; serialNumbers: string[] }[];
   refunds: { id: string; number: string; amount: number; method: string; paymentDate: string; status: string }[];
 }
 
@@ -43,7 +45,14 @@ export default function SaleReturnPage({ params }: { params: Promise<{ id: strin
   const meta: [string, React.ReactNode][] = [
     ["Date", date(r.returnDate)],
     ["Invoice", r.invoiceNumber],
-    ["Customer", r.customerName],
+    [
+      "Customer",
+      r.partyId ? (
+        <Link href={`${base}/parties/${r.partyId}`} className="font-semibold text-[#044d73] hover:underline print:text-slate-800 print:no-underline">{r.customerName}</Link>
+      ) : (
+        r.customerName
+      ),
+    ],
   ];
   return (
     <div>
@@ -76,7 +85,7 @@ export default function SaleReturnPage({ params }: { params: Promise<{ id: strin
                 {r.items.map((i) => (
                   <tr key={i.id}>
                     <td className="px-4 py-3 sm:pl-5">
-                      <div className="font-semibold text-slate-800">{i.displayName}</div>
+                      <ProductName productId={i.productId} name={i.displayName} />
                       <div className="text-xs text-slate-400">{i.sku}</div>
                       {i.serialNumbers.length > 0 && <div className="font-mono text-xs text-slate-500">S/N: {i.serialNumbers.join(", ")}</div>}
                     </td>

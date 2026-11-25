@@ -64,6 +64,8 @@ export default function DashboardPage() {
   }
 
   const k = data?.kpis;
+  // carry the dashboard's location into the lists it links to
+  const locQs = loc && loc !== "all" ? `&locationId=${loc}` : "";
   const a = data?.attention;
   const attention = a
     ? ([
@@ -126,7 +128,7 @@ export default function DashboardPage() {
                     ? `${((k.month.grossProfit / k.month.netRevenue) * 100).toFixed(1)}% margin on ${fmt.moneyShort(k.month.netRevenue)}`
                     : "No sales yet this month"
                 }
-                href={`${base}/reports?tab=profit-loss`}
+                href={`${base}/reports/profit-loss`}
               />
             ) : (
               <StatCard label="Sales (month)" value={fmt.money(k.month.amount)} accent="green" icon={TrendingUp} hint={`${k.month.sales} sales`} />
@@ -269,15 +271,25 @@ export default function DashboardPage() {
                   ))}
                 </ul>
               )}
-              {(k.expiringSoon > 0 || k.expired > 0 || k.outOfStock > 0) && (
+              {(k.expiringSoon > 0 || k.expired > 0 || k.outOfStock > 0 || k.lowStock > 0) && (
                 <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-                  {k.expiringSoon + k.expired > 0 && (
-                    <Link href={`${base}/inventory/lots?expiring=${settings.expiryAlertDays}`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700 hover:underline">
-                      <CalendarClock className="h-3.5 w-3.5" /> {k.expired} expired, {k.expiringSoon} expiring within {settings.expiryAlertDays} days
+                  {k.expired > 0 && (
+                    <Link href={`${base}/inventory/lots?status=EXPIRED${locQs}`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:underline">
+                      <CalendarClock className="h-3.5 w-3.5" /> {k.expired} batch{k.expired === 1 ? "" : "es"} expired
+                    </Link>
+                  )}
+                  {k.expiringSoon > 0 && (
+                    <Link href={`${base}/inventory/lots?expiring=${settings.expiryAlertDays}${locQs}`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-violet-700 hover:underline">
+                      <CalendarClock className="h-3.5 w-3.5" /> {k.expiringSoon} expiring within {settings.expiryAlertDays} days
+                    </Link>
+                  )}
+                  {k.lowStock > 0 && (
+                    <Link href={`${base}/inventory?status=low${locQs}`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:underline">
+                      <AlertTriangle className="h-3.5 w-3.5" /> {k.lowStock} running low
                     </Link>
                   )}
                   {k.outOfStock > 0 && (
-                    <Link href={`${base}/inventory?status=out`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:underline">
+                    <Link href={`${base}/inventory?status=out${locQs}`} className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:underline">
                       <PackageX className="h-3.5 w-3.5" /> {k.outOfStock} out of stock
                     </Link>
                   )}

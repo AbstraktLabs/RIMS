@@ -49,7 +49,7 @@ export default function PurchasesPage() {
         actions={canManage && <LinkButton href={`${base}/purchases/new`} icon={Plus}>Record purchase</LinkButton>}
       />
       {sum && (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           <StatCard label="Purchased" value={money(sum.totalAmount)} hint={`${list.data?.total ?? 0} bills`} />
           <StatCard label="Paid" value={money(sum.totalPaid)} accent="green" />
           <StatCard label="Unpaid" value={money(Math.max(0, sum.totalAmount - sum.totalPaid))} accent="amber" hint="Before supplier return credits" />

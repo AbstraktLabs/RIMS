@@ -297,6 +297,7 @@ export async function getSaleReturn(auth: AuthContext, id: string) {
         saleItemId: saleReturnItems.saleItemId,
         variantId: saleReturnItems.variantId,
         displayName,
+        productId: productVariants.productId,
         sku: productVariants.sku,
         unitCode: units.code,
         quantity: saleReturnItems.quantity,

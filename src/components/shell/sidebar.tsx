@@ -31,9 +31,17 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useSession } from "@/lib/client/session";
+import { useSession, type OrgSettings } from "@/lib/client/session";
 
-type NavItem = { href: string; label: string; icon: LucideIcon; perm?: string | string[]; exact?: boolean };
+type NavItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  perm?: string | string[];
+  exact?: boolean;
+  /** shown only when the business has this feature switched on */
+  feature?: (s: OrgSettings) => boolean;
+};
 type NavGroup = { id: string; label: string; icon: LucideIcon; items: NavItem[] };
 type Entry = NavItem | NavGroup;
 const isGroup = (e: Entry): e is NavGroup => "items" in e;
@@ -76,11 +84,11 @@ function entries(): Entry[] {
       icon: Boxes,
       items: [
         { href: "/inventory", label: "Stock levels", icon: Boxes, perm: "inventory.view", exact: true },
-        { href: "/inventory/lots", label: "Batches & expiry", icon: Layers, perm: "inventory.view" },
-        { href: "/inventory/serials", label: "Serial numbers", icon: ScanBarcode, perm: "inventory.view" },
+        { href: "/inventory/lots", label: "Batches & expiry", icon: Layers, perm: "inventory.view", feature: (s) => s.enableBatchTracking || s.enableExpiryTracking },
+        { href: "/inventory/serials", label: "Serial numbers", icon: ScanBarcode, perm: "inventory.view", feature: (s) => s.enableSerialTracking },
         { href: "/inventory/movements", label: "Stock movements", icon: ArrowLeftRight, perm: "inventory.view" },
         { href: "/inventory/adjustments", label: "Adjustments", icon: ClipboardList, perm: "inventory.view" },
-        { href: "/inventory/transfers", label: "Transfers", icon: Truck, perm: "inventory.view" },
+        { href: "/inventory/transfers", label: "Transfers", icon: Truck, perm: "inventory.view", feature: (s) => s.enableMultiLocation },
       ],
     },
     { href: "/parties", label: "Customers & suppliers", icon: Users, perm: "parties.view" },
@@ -109,9 +117,9 @@ function entries(): Entry[] {
 }
 
 function useNav() {
-  const { base, can } = useSession();
+  const { base, can, settings } = useSession();
   const pathname = usePathname();
-  const visible = (i: NavItem) => !i.perm || can(i.perm);
+  const visible = (i: NavItem) => (!i.perm || can(i.perm)) && (!i.feature || i.feature(settings));
   const list = entries()
     .map((e) => (isGroup(e) ? { ...e, items: e.items.filter(visible) } : e))
     .filter((e) => (isGroup(e) ? e.items.length > 0 : visible(e)));

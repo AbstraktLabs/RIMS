@@ -184,6 +184,7 @@ export async function getAdjustment(auth: AuthContext, id: string) {
       id: stockAdjustmentItems.id,
       variantId: stockAdjustmentItems.variantId,
       displayName: sql<string>`case when ${productVariants.isDefault} then ${products.name} else ${products.name} || ' (' || ${productVariants.name} || ')' end`,
+      productId: productVariants.productId,
       sku: productVariants.sku,
       unitCode: units.code,
       lotId: stockAdjustmentItems.lotId,
