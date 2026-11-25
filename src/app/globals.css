@@ -1,8 +1,8 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8fafc;
+  --foreground: #0f172a;
 }
 
 @theme inline {
@@ -12,15 +12,74 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@keyframes dot-bounce {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  40% {
+    transform: translateY(-8px);
+    opacity: 1;
+  }
+}
+.animate-dot-bounce {
+  animation: dot-bounce 1.2s infinite ease-in-out both;
+}
+
+/* cleaner numeric inputs */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* "Save as PDF" goes through the browser print dialog */
+@media print {
+  @page {
+    size: auto;
+    margin: 10mm;
+  }
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+}
+
+/* POS receipts print on their own narrow page */
+#print-receipt {
+  display: none;
+}
+@page receipt {
+  size: 80mm auto;
+  margin: 3mm;
+}
+@media print {
+  body.printing-receipt > *:not(#print-receipt) {
+    display: none !important;
+  }
+  body.printing-receipt #print-receipt {
+    display: block;
+    page: receipt;
+    width: 74mm;
+    font-size: 11px;
+  }
 }

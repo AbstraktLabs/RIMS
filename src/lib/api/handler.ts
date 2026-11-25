@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
+import { connection, NextRequest, NextResponse } from "next/server";
+import { unstable_rethrow } from "next/navigation";
 import { z, ZodError, type ZodType } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -41,6 +42,8 @@ function toResponse(result: unknown): Response {
 }
 
 export function errorResponse(err: unknown): Response {
+  // let Next.js control-flow errors (dynamic bail-out, redirects…) through
+  unstable_rethrow(err);
   if (err instanceof AppError) {
     const headers: Record<string, string> = {};
     const retry = (err.details as { retryAfterSeconds?: number } | undefined)?.retryAfterSeconds;
@@ -138,6 +141,7 @@ export function tenantRoute(
   fn: (args: HandlerArgs & { auth: AuthContext }) => Promise<unknown>,
 ) {
   return async (req: NextRequest, ctx: RouteCtx): Promise<Response> => {
+    await connection(); // API responses are always per-request, never prerendered
     try {
       const auth = readAuth(req);
       if (!auth) throw unauthorized("Your session has expired. Please sign in again.");
@@ -170,6 +174,7 @@ export function tenantRoute(
 
 export function publicRoute(fn: (args: HandlerArgs) => Promise<unknown>) {
   return async (req: NextRequest, ctx: RouteCtx): Promise<Response> => {
+    await connection(); // API responses are always per-request, never prerendered
     try {
       const params = ctx?.params ? await ctx.params : {};
       return toResponse(await fn({ req, params }));
@@ -185,6 +190,7 @@ export interface PlatformAuth {
 
 export function platformRoute(fn: (args: HandlerArgs & { admin: PlatformAuth }) => Promise<unknown>) {
   return async (req: NextRequest, ctx: RouteCtx): Promise<Response> => {
+    await connection(); // API responses are always per-request, never prerendered
     try {
       const token = req.cookies.get(PLATFORM_COOKIE)?.value;
       if (!token) throw unauthorized();
