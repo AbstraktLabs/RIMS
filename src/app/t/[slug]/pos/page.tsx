@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Banknote, CheckCircle2, CreditCard, Loader2, Minus, Package, Plus, Printer, ScanBarcode, ShoppingCart, Smartphone, Trash2, UserRound, X } from "lucide-react";
+import { Banknote, CheckCircle2, ChevronUp, CreditCard, Loader2, Minus, Package, Plus, Printer, ScanBarcode, ShoppingCart, Smartphone, Trash2, UserRound, X } from "lucide-react";
 import { PartySelect } from "@/components/pickers";
 import { LotSelect, SerialPicker } from "@/components/stock-pickers";
 import { PaymentRows, paymentBody, type PaymentRow } from "@/components/doc";
@@ -49,6 +49,18 @@ export default function PosPage() {
   const [done, setDone] = useState<ReceiptSale & { id: string } | null>(null);
   const uid = useRef(1);
   const search = useRef<HTMLInputElement>(null);
+  const cartRef = useRef<HTMLElement>(null);
+  const footRef = useRef<HTMLDivElement>(null);
+  // phone layout: the cart sits under the product grid, so a bar pinned to the bottom
+  // shows the total and charge button until the cart's own footer scrolls into view
+  const [footVisible, setFootVisible] = useState(true);
+  useEffect(() => {
+    const el = footRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setFootVisible(e.isIntersecting), { threshold: 0.25 });
+    io.observe(el);
+    return () => io.disconnect();
+  });
 
   const add = (v: SearchVariant, serial?: string | null) => {
     setScanMsg(null);
@@ -123,6 +135,9 @@ export default function PosPage() {
     return out;
   });
   const itemCount = lines.reduce((s, l) => s + Number(l.quantity || 0), 0);
+  const blocked = !lines.length || !!totalsError || problems.length > 0;
+  const showBar = lines.length > 0 && !footVisible && !checkout && !done;
+  const toCart = () => cartRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
 
   const reset = () => {
     setLines([]);
@@ -140,7 +155,7 @@ export default function PosPage() {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:h-[calc(100vh-3rem)] lg:grid-cols-[1fr_420px]">
+    <div className={`grid grid-cols-1 gap-4 lg:h-[calc(100vh-3rem)] lg:grid-cols-[1fr_420px] ${lines.length ? "pb-20 lg:pb-0" : ""}`}>
       {/* products */}
       <section className="flex min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="space-y-2 border-b border-slate-100 p-3 sm:p-4">
@@ -206,12 +221,12 @@ export default function PosPage() {
       </section>
 
       {/* cart */}
-      <section className="flex min-h-[70vh] flex-col rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
+      <section ref={cartRef} className="flex min-h-[70vh] scroll-mt-16 flex-col rounded-xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
         <div className="space-y-2 border-b border-slate-100 p-3">
           <div className="flex items-center gap-2">
             <ShoppingCart className="h-4 w-4 text-[#044d73]" />
             <span className="text-sm font-semibold text-slate-800">Cart</span>
-            {lines.length > 0 && <Badge tone="blue">{qty(itemCount)} items</Badge>}
+            {lines.length > 0 && <Badge tone="blue">{qty(itemCount)} {itemCount === 1 ? "item" : "items"}</Badge>}
             <div className="ml-auto flex items-center gap-1">
               {settings.enableWholesalePricing && (
                 <select aria-label="Price level" value={level} onChange={(e) => changeLevel(e.target.value as Level)} className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs">
@@ -303,7 +318,7 @@ export default function PosPage() {
           )}
         </div>
 
-        <div className="space-y-1 border-t border-slate-200 p-3">
+        <div ref={footRef} className="space-y-1 border-t border-slate-200 p-3">
           <SummaryRow label="Subtotal" value={money(totals?.subtotal ?? 0)} />
           <div className="flex items-center justify-between py-1 text-sm text-slate-600">
             <span>Discount</span>
@@ -315,11 +330,33 @@ export default function PosPage() {
             <span className="text-2xl font-bold tabular-nums text-[#044d73]">{money(totals?.grandTotal ?? 0)}</span>
           </div>
           {(totalsError || problems[0]) && <p className="text-xs font-semibold text-rose-600">{totalsError ?? problems[0]}</p>}
-          <Button className="mt-2 h-12 w-full text-base" disabled={!lines.length || !!totalsError || problems.length > 0} onClick={() => setCheckout(true)}>
+          <Button className="mt-2 h-12 w-full text-base" disabled={blocked} onClick={() => setCheckout(true)}>
             Charge {money(totals?.grandTotal ?? 0)}
           </Button>
         </div>
       </section>
+
+      {showBar && (
+        <div className="fixed inset-x-0 bottom-0 z-20 border-t border-slate-200 bg-white/95 px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] shadow-[0_-4px_16px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden print:hidden">
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={toCart} aria-label="View cart" className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-2 py-1.5 text-left hover:bg-slate-50">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#044d73]/10">
+                <ShoppingCart className="h-5 w-5 text-[#044d73]" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-[11px] font-semibold text-slate-500">{qty(itemCount)} {itemCount === 1 ? "item" : "items"} · View cart <ChevronUp className="inline h-3 w-3" /></span>
+                <span className="block truncate text-lg font-bold tabular-nums text-slate-900">{money(totals?.grandTotal ?? 0)}</span>
+              </span>
+            </button>
+            {blocked ? (
+              <Button variant="secondary" className="h-11" onClick={toCart}>Review</Button>
+            ) : (
+              <Button className="h-11 px-5" onClick={() => setCheckout(true)}>Charge</Button>
+            )}
+          </div>
+          {blocked && (totalsError || problems[0]) && <p className="mt-1 truncate text-xs font-semibold text-rose-600">{totalsError ?? problems[0]}</p>}
+        </div>
+      )}
 
       {checkout && totals && (
         <CheckoutModal
