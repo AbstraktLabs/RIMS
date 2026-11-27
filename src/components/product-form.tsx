@@ -6,7 +6,7 @@ import { Plus, Save, Trash2, X } from "lucide-react";
 import { Field, FormGrid, Input, Select, Textarea, Toggle } from "@/components/ui/form";
 import { Alert, Button, Card, CardHeader } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
-import { post, put } from "@/lib/client/api";
+import { errorMessage, post, put } from "@/lib/client/api";
 import { useAction, useApi } from "@/lib/client/hooks";
 import { useSession } from "@/lib/client/session";
 import type { TaxRate, Unit } from "@/lib/client/types";
@@ -85,8 +85,97 @@ function toRow(v?: ProductDetail["variants"][number]): VariantRow {
   };
 }
 
+function CreatableSelect({
+  label,
+  noun,
+  value,
+  items,
+  canCreate,
+  onChange,
+  onCreate,
+}: {
+  label: string;
+  noun: string;
+  value: string;
+  items: { id: string; name: string }[];
+  canCreate: boolean;
+  onChange: (id: string) => void;
+  onCreate: (name: string) => Promise<void>;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const close = () => {
+    setAdding(false);
+    setDraft("");
+    setErr(null);
+  };
+
+  const save = async () => {
+    const name = draft.trim();
+    if (!name || saving) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await onCreate(name);
+      close();
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Field label={label} error={err}>
+      {adding ? (
+        <div className="flex items-center gap-1.5">
+          <Input
+            autoFocus
+            value={draft}
+            placeholder={`New ${noun} name`}
+            disabled={saving}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                save();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                close();
+              }
+            }}
+          />
+          <Button type="button" size="sm" loading={saving} disabled={!draft.trim()} onClick={save}>
+            Add
+          </Button>
+          <Button type="button" size="sm" variant="ghost" icon={X} aria-label={`Cancel adding ${noun}`} disabled={saving} onClick={close} />
+        </div>
+      ) : (
+        <Select
+          value={value}
+          onChange={(e) => {
+            if (e.target.value === "__new") setAdding(true);
+            else onChange(e.target.value);
+          }}
+        >
+          <option value="">— None —</option>
+          {items.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+          {canCreate && <option value="__new">+ Add new {noun}…</option>}
+        </Select>
+      )}
+    </Field>
+  );
+}
+
 export function ProductForm({ product, onSaved }: { product?: ProductDetail; onSaved?: (p: ProductDetail) => void }) {
-  const { settings, base } = useSession();
+  const { settings, base, can, readOnly } = useSession();
   const router = useRouter();
   const toast = useToast();
   const units = useApi<{ items: Unit[] }>("/api/units");
@@ -220,18 +309,36 @@ export function ProductForm({ product, onSaved }: { product?: ProductDetail; onS
                 <Input required value={f.name} onChange={(e) => up("name", e.target.value)} placeholder="e.g. Cotton T-Shirt" autoFocus={!product} />
               </Field>
               <FormGrid>
-                <Field label="Category">
-                  <Select value={f.categoryId} onChange={(e) => up("categoryId", e.target.value)}>
-                    <option value="">— None —</option>
-                    {cats.data?.items.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </Select>
-                </Field>
-                <Field label="Brand">
-                  <Select value={f.brandId} onChange={(e) => up("brandId", e.target.value)}>
-                    <option value="">— None —</option>
-                    {brands.data?.items.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </Select>
-                </Field>
+                <CreatableSelect
+                  label="Category"
+                  noun="category"
+                  value={f.categoryId}
+                  items={cats.data?.items ?? []}
+                  canCreate={can("products.manage") && !readOnly}
+                  onChange={(id) => up("categoryId", id)}
+                  onCreate={async (name) => {
+                    const { category } = await post<{ category: { id: string; name: string } }>("/api/categories", { name });
+                    cats.setData({ items: [...(cats.data?.items ?? []), category].sort((a, b) => a.name.localeCompare(b.name)) });
+                    cats.reload();
+                    up("categoryId", category.id);
+                    toast("Category added");
+                  }}
+                />
+                <CreatableSelect
+                  label="Brand"
+                  noun="brand"
+                  value={f.brandId}
+                  items={brands.data?.items ?? []}
+                  canCreate={can("products.manage") && !readOnly}
+                  onChange={(id) => up("brandId", id)}
+                  onCreate={async (name) => {
+                    const { brand } = await post<{ brand: { id: string; name: string } }>("/api/brands", { name });
+                    brands.setData({ items: [...(brands.data?.items ?? []), brand].sort((a, b) => a.name.localeCompare(b.name)) });
+                    brands.reload();
+                    up("brandId", brand.id);
+                    toast("Brand added");
+                  }}
+                />
                 <Field label="Model / style">
                   <Input value={f.model} onChange={(e) => up("model", e.target.value)} />
                 </Field>

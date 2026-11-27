@@ -23,7 +23,6 @@ import {
   ScanBarcode,
   Settings,
   ShoppingCart,
-  Tags,
   Truck,
   UserCog,
   Users,
@@ -69,15 +68,7 @@ function entries(): Entry[] {
         { href: "/purchase-returns", label: "Purchase returns", icon: RotateCcw, perm: "purchases.view" },
       ],
     },
-    {
-      id: "catalog",
-      label: "Catalogue",
-      icon: Package,
-      items: [
-        { href: "/products", label: "Products", icon: Package, perm: "products.view" },
-        { href: "/categories", label: "Categories & brands", icon: Tags, perm: "products.view" },
-      ],
-    },
+    { href: "/products", label: "Products", icon: Package, perm: "products.view" },
     {
       id: "inventory",
       label: "Inventory",
