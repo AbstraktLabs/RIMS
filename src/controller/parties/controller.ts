@@ -8,6 +8,8 @@ import { money, num, round2 } from "@/lib/num";
 import type { ledgerQuery, partiesQuery, partySchema, updatePartySchema } from "@/lib/validation/parties";
 import { allBalancesSql, ledgerLinesSql, partyBalance } from "../_shared/ledger";
 import { countAll, likePattern, offsetFor, pageOf } from "../_shared/paging";
+import { getBusiness } from "../settings/controller";
+import { formatBsDate, getFiscalYear } from "@/lib/client/nepali-date";
 
 type PartyInput = z.infer<typeof partySchema>;
 type PartyUpdate = z.infer<typeof updatePartySchema>;
@@ -226,5 +228,91 @@ export async function partyLedger(auth: AuthContext, id: string, q: z.infer<type
     entries,
     totals: { debit: round2(totalDebit), credit: round2(totalCredit) },
     closingBalance: running,
+  };
+}
+
+/** Counts for the Parties page tiles; SUPPLIER/CUSTOMER include BOTH. */
+export async function partyStats(auth: AuthContext, type?: "SUPPLIER" | "CUSTOMER" | "BOTH") {
+  const [r] = await db
+    .select({
+      totalCount: countAll,
+      activeCount: sql<number>`(count(*) filter (where ${parties.isActive}))::int`,
+    })
+    .from(parties)
+    .where(
+      and(
+        eq(parties.organizationId, auth.organizationId),
+        type && type !== "BOTH" ? or(eq(parties.partyType, type), eq(parties.partyType, "BOTH")) : undefined,
+      ),
+    );
+  return { stats: { totalCount: r.totalCount, activeCount: r.activeCount, inactiveCount: r.totalCount - r.activeCount } };
+}
+
+const LEDGER_TYPE: Record<string, "Sale" | "Purc" | "SlRt" | "PurRt" | "Jrnl" | "Rcpt" | "Pymt"> = {
+  SALE: "Sale",
+  PURCHASE: "Purc",
+  SALE_RETURN: "SlRt",
+  PURCHASE_RETURN: "PurRt",
+  RECEIVED_FROM_CUSTOMER: "Rcpt",
+  REFUND_FROM_SUPPLIER: "Rcpt",
+  PAID_TO_SUPPLIER: "Pymt",
+  REFUND_TO_CUSTOMER: "Pymt",
+};
+
+/** The pharmacy-style account statement (Party Ledger screen), with BS dates. */
+export async function partyStatement(auth: AuthContext, id: string, q: { startDate?: string; endDate?: string }) {
+  const [ledger, full, { organization: org }] = await Promise.all([
+    partyLedger(auth, id, { from: q.startDate, to: q.endDate }),
+    db.query.parties.findFirst({ where: and(eq(parties.id, id), eq(parties.organizationId, auth.organizationId)) }),
+    getBusiness(auth),
+  ]);
+  const bs = (d: string | null | undefined) => (d ? formatBsDate(new Date(d)) : null);
+  const side = (n: number): "Dr" | "Cr" => (n < 0 ? "Cr" : "Dr");
+  const entries = ledger.entries.map((e, i) => ({
+    id: e.documentId ?? `${e.type}-${i}`,
+    nepaliDate: bs(e.date) ?? "",
+    englishDate: e.date,
+    rawDate: e.date,
+    type: LEDGER_TYPE[e.type] ?? "Jrnl",
+    vchNo: e.number ?? "—",
+    particulars: e.description,
+    debit: e.debit,
+    credit: e.credit,
+    balance: Math.abs(e.balance),
+    balanceType: side(e.balance),
+  }));
+  return {
+    party: {
+      id: ledger.party.id,
+      name: ledger.party.name,
+      partyType: ledger.party.partyType,
+      panVatNumber: full?.taxId ?? null,
+      phone: ledger.party.phone,
+      address: ledger.party.address,
+      email: full?.email ?? null,
+    },
+    organization: {
+      id: auth.organizationId,
+      businessName: org.name,
+      panVatNumber: org.taxId,
+      address: org.address,
+      phone: org.phone,
+      fiscalYear: getFiscalYear(new Date()),
+    },
+    dateRange: {
+      startDate: ledger.from,
+      endDate: ledger.to,
+      startBsDate: bs(ledger.from),
+      endBsDate: bs(ledger.to),
+    },
+    openingBalance: { amount: Math.abs(ledger.openingBalance), type: side(ledger.openingBalance) },
+    entries,
+    summary: {
+      totalDebit: ledger.totals.debit,
+      totalCredit: ledger.totals.credit,
+      closingBalance: Math.abs(ledger.closingBalance),
+      closingBalanceType: ledger.closingBalance < 0 ? ("Credit Balance" as const) : ("Debit Balance" as const),
+      grandTotal: Math.max(ledger.totals.debit, ledger.totals.credit) + Math.abs(ledger.openingBalance),
+    },
   };
 }

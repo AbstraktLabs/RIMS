@@ -2,12 +2,12 @@ import Link from "next/link";
 import { ArrowRight, Barcode, Boxes, LineChart, Receipt, ShieldCheck, Store } from "lucide-react";
 
 const FEATURES = [
-  { icon: Store, title: "Fast POS", text: "Barcode scanning, split payments, change and printable receipts." },
-  { icon: Boxes, title: "Any kind of stock", text: "Variants, decimal units, batches with expiry and serial numbers." },
-  { icon: Receipt, title: "Purchasing", text: "Purchase orders, supplier bills, landed cost and supplier returns." },
-  { icon: LineChart, title: "Real profit", text: "Cost of goods per batch, P&L, tax and stock valuation reports." },
-  { icon: Barcode, title: "Multiple locations", text: "Stores and warehouses with transfers between them." },
-  { icon: ShieldCheck, title: "Roles", text: "Owner, manager and read-only staff, per location." },
+  { icon: Store, title: "Sales invoices", text: "Sell from the batch you pick, cash or credit, with printable tax invoices." },
+  { icon: Boxes, title: "Inventory & batches", text: "Sizes and colours, batches with expiry, supplier returns and write-offs." },
+  { icon: Receipt, title: "Purchases", text: "Supplier bills that add stock straight to a batch, with part payments." },
+  { icon: LineChart, title: "Real profit", text: "Revenue, cost of goods, expenses and net profit by month or year." },
+  { icon: Barcode, title: "Multiple locations", text: "Each shop keeps its own stock, with transfers between them." },
+  { icon: ShieldCheck, title: "Roles", text: "Owner, manager and read-only accounts, per location." },
 ];
 
 export default function Home() {

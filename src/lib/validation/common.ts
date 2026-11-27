@@ -30,6 +30,7 @@ export const signedQuantity = z.coerce
 export const percent = z.coerce.number().min(0).max(100);
 
 export const paymentMethod = z.enum(["CASH", "CARD", "BANK_TRANSFER", "CHEQUE", "MOBILE_WALLET", "OTHER"]);
+export const paymentType = z.enum(["CASH", "CREDIT", "BANK_TRANSFER", "CHEQUE", "MOBILE_PAYMENT"]);
 export const taxMode = z.enum(["EXCLUSIVE", "INCLUSIVE", "EXEMPT"]);
 
 export const pagination = {

@@ -150,6 +150,7 @@ export interface ReceiveInput {
     expiryDate?: string | null;
     supplierId?: string | null;
     purchaseItemId?: string | null;
+    note?: string | null;
   };
   serials?: {
     numbers: string[];
@@ -212,6 +213,7 @@ export async function receiveStock(tx: Tx, input: ReceiveInput): Promise<{ lotId
           lotNumber: lot.lotNumber ?? null,
           manufacturingDate: lot.manufacturingDate ?? null,
           expiryDate: lot.expiryDate ?? null,
+          note: lot.note ?? null,
           unitCost: costStr(unitCost),
           quantityReceived: qtyStr(quantity),
           quantityAvailable: qtyStr(quantity),

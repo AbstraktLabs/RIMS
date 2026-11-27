@@ -1,106 +1,867 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Plus, Users } from "lucide-react";
-import { PARTY_TYPE_LABELS, PartyFormModal, type PartyType } from "@/components/party";
-import { FilterSelect, SearchInput } from "@/components/ui/form";
-import { Badge, Button, EmptyState, PageHeader, StatCard, Tabs } from "@/components/ui/primitives";
-import { DataTable, Pagination, TableCard } from "@/components/ui/table";
-import { useList } from "@/lib/client/hooks";
-import { useFmt, useSession } from "@/lib/client/session";
-import type { PartyRow } from "@/lib/client/types";
+import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+import {
+  UserPlus,
+  Search,
+  Mail,
+  Phone,
+  MapPin,
+  Building2,
+  X,
+  Pencil,
+  Trash2,
+  Users,
+  CheckCircle,
+  XCircle,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
+  FileText,
+  CreditCard,
+} from "lucide-react";
+import { api, apiError } from "@/lib/client/http";
+import { useSession } from "@/lib/client/session";
+import { AnimatedStatValue } from "@/components/pharma/animated-stat-value";
+import { DotsLoader } from "@/components/pharma/dots-loader";
+
+/* ------------------------------------------------------------------ */
+/* Types                                                               */
+/* ------------------------------------------------------------------ */
+
+type PartyType = "SUPPLIER" | "CUSTOMER" | "BOTH";
+type TypeTab = "ALL" | "SUPPLIER" | "CUSTOMER";
+
+interface Party {
+  id: string;
+  name: string;
+  partyType: PartyType;
+  contactPerson: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  panVatNumber: string | null;
+  paymentTerms: string | null;
+  status: boolean;
+}
+
+interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+interface PartyStats {
+  totalCount: number;
+  activeCount: number;
+  inactiveCount: number;
+}
+
+const PAGE_LIMIT = 8;
+const SEARCH_DEBOUNCE_MS = 400;
+
+const EMPTY_FORM = {
+  name: "",
+  partyType: "BOTH" as PartyType,
+  contactPerson: "",
+  phone: "",
+  email: "",
+  address: "",
+  panVatNumber: "",
+  paymentTerms: "",
+};
+
+const TYPE_TABS: { value: TypeTab; label: string }[] = [
+  { value: "ALL", label: "All Parties" },
+  { value: "SUPPLIER", label: "Suppliers" },
+  { value: "CUSTOMER", label: "Customers" },
+];
+
+const TYPE_LABEL: Record<PartyType, string> = {
+  SUPPLIER: "Supplier",
+  CUSTOMER: "Customer",
+  BOTH: "Supplier & Customer",
+};
+
+const TYPE_BADGE: Record<PartyType, string> = {
+  SUPPLIER: "bg-sky-50 text-sky-700 border-sky-200/60",
+  CUSTOMER: "bg-violet-50 text-violet-700 border-violet-200/60",
+  BOTH: "bg-teal-50 text-teal-700 border-teal-200/60",
+};
+
+const inputCls =
+  "w-full rounded-lg border border-slate-200/80 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400/80 bg-slate-50/30 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all";
+const iconInputCls =
+  "w-full rounded-lg border border-slate-200/80 py-2.5 pl-9 pr-3 text-sm text-slate-800 placeholder:text-slate-400/80 bg-slate-50/30 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all";
+const labelCls = "mb-1.5 block text-xs font-semibold text-slate-500 sm:text-sm sm:mb-2";
+
+function TypeBadge({ type }: { type: PartyType }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ${TYPE_BADGE[type]}`}
+    >
+      {TYPE_LABEL[type]}
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Page                                                                */
+/* ------------------------------------------------------------------ */
+
+// RIMS names the PAN/VAT field taxId and the active flag isActive.
+const fromApi = (p: any): Party => ({ ...p, panVatNumber: p.taxId ?? null, status: p.isActive });
 
 export default function PartiesPage() {
-  const { base, can, readOnly } = useSession();
-  const { money } = useFmt();
-  const router = useRouter();
-  const [adding, setAdding] = useState(false);
-  const list = useList<PartyRow, { search: string; type: string; balance: string; status: string; sort: string }>("/api/parties", {
-    search: "",
-    type: "",
-    balance: "",
-    status: "active",
-    sort: "name",
+  const { base, can } = useSession();
+  const canManage = can("parties.manage");
+  const [parties, setParties] = useState<Party[]>([]);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [typeTab, setTypeTab] = useState<TypeTab>("ALL");
+  const [searchInput, setSearchInput] = useState(""); // what the user is typing
+  const [search, setSearch] = useState(""); // the debounced value actually sent to the backend
+
+  const [statusFilter, setStatusFilter] = useState<"All" | "Active" | "Inactive">("All");
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingParty, setEditingParty] = useState<Party | null>(null);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const [deleteTarget, setDeleteTarget] = useState<Party | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const [stats, setStats] = useState<PartyStats>({
+    totalCount: 0,
+    activeCount: 0,
+    inactiveCount: 0,
   });
-  const { filters: f, set } = list;
-  const canManage = can("parties.manage") && !readOnly;
-  const sum = (list.data as { summary?: { receivable: number; payable: number } } | null)?.summary;
-  const addType: PartyType = f.type === "SUPPLIER" ? "SUPPLIER" : "CUSTOMER";
+
+  const typeParam = typeTab === "ALL" ? undefined : typeTab;
+
+  const loadStats = useCallback(async () => {
+    try {
+      const res = await api.get("/api/parties/stats", { params: { type: typeParam } });
+      setStats(res.data.stats);
+    } catch (error) {
+      if (error instanceof Error) {
+        console.log("error in loading the stats", error.message);
+      }
+    }
+  }, [typeParam]);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  // Debounce: wait until the user stops typing before firing a request.
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setSearch(searchInput);
+      setCurrentPage(1); // reset to page 1 whenever the search term changes
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timeout);
+  }, [searchInput]);
+
+  // Real server-side pagination + search — refetches whenever page, search or tab changes.
+  const loadParties = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await api.get("/api/parties", {
+        params: {
+          page: currentPage,
+          limit: PAGE_LIMIT,
+          search: search || undefined,
+          type: typeParam,
+          status: "all",
+        },
+      });
+      setParties(res.data.items.map(fromApi));
+      setPagination(res.data.pagination);
+    } catch {
+      setLoadError("Failed to load parties.");
+    } finally {
+      setLoading(false);
+    }
+  }, [currentPage, search, typeParam]);
+
+  useEffect(() => {
+    loadParties();
+  }, [loadParties]);
+
+  const filtered = parties.filter((p) => {
+    const matchesStatus =
+      statusFilter === "All" || (statusFilter === "Active" ? p.status : !p.status);
+    return matchesStatus;
+  });
+
+  const totalPages = pagination?.totalPages ?? 1;
+
+  function handleTabChange(tab: TypeTab) {
+    setTypeTab(tab);
+    setCurrentPage(1);
+  }
+
+  function resetForm() {
+    setForm(EMPTY_FORM);
+    setEditingParty(null);
+    setErrorMsg(null);
+  }
+
+  function handleOpenAdd() {
+    resetForm();
+    // Pre-select the type that matches the tab the user is looking at.
+    setForm({ ...EMPTY_FORM, partyType: typeTab === "ALL" ? "BOTH" : typeTab });
+    setIsModalOpen(true);
+  }
+
+  function handleOpenEdit(party: Party) {
+    setEditingParty(party);
+    setForm({
+      name: party.name,
+      partyType: party.partyType,
+      contactPerson: party.contactPerson ?? "",
+      phone: party.phone ?? "",
+      email: party.email ?? "",
+      address: party.address ?? "",
+      panVatNumber: party.panVatNumber ?? "",
+      paymentTerms: party.paymentTerms ?? "",
+    });
+    setIsModalOpen(true);
+  }
+
+  async function handleSaveParty() {
+    if (!form.name.trim()) {
+      setErrorMsg("Party name is required.");
+      return;
+    }
+
+    setSaving(true);
+    setErrorMsg(null);
+
+    const payload = {
+      name: form.name.trim(),
+      partyType: form.partyType,
+      contactPerson: form.contactPerson.trim() || undefined,
+      phone: form.phone.trim() || undefined,
+      email: form.email.trim() || undefined,
+      address: form.address.trim() || undefined,
+      taxId: form.panVatNumber.trim() || null,
+      paymentTerms: form.paymentTerms.trim() || undefined,
+    };
+    try {
+      if (editingParty) {
+        await api.patch(`/api/parties/${editingParty.id}`, payload);
+      } else {
+        await api.post("/api/parties", payload);
+      }
+      resetForm();
+      setIsModalOpen(false);
+      // Refetch rather than patch local state: a type change can move the
+      // party in or out of the current tab.
+      await Promise.all([loadParties(), loadStats()]);
+    } catch (err) {
+      setErrorMsg(apiError(err, "Failed to save party. Please try again."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmDeleteParty() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      const res = await api.delete(`/api/parties/${deleteTarget.id}`);
+      // parties with bills are deactivated instead of deleted
+      if (res.data?.archived) setLoadError(res.data.message);
+      if (parties.length === 1 && currentPage > 1) {
+        setCurrentPage((p) => p - 1);
+      } else {
+        await loadParties();
+      }
+      await loadStats();
+      setDeleteTarget(null);
+    } catch {
+      setLoadError(
+        "Failed to delete party — it may be referenced by existing purchases or sales.",
+      );
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function toggleStatus(party: Party) {
+    const updated = { ...party, status: !party.status };
+    setParties((prev) => prev.map((p) => (p.id === party.id ? updated : p)));
+    try {
+      await api.patch(`/api/parties/${party.id}`, { isActive: updated.status });
+      await loadStats();
+    } catch {
+      setParties((prev) => prev.map((p) => (p.id === party.id ? party : p)));
+    }
+  }
+
+  const tabNoun =
+    typeTab === "SUPPLIER" ? "suppliers" : typeTab === "CUSTOMER" ? "customers" : "parties";
 
   return (
-    <div>
-      <PageHeader
-        title="Customers & suppliers"
-        subtitle="Everyone you sell to or buy from, with what they owe and what you owe them"
-        actions={canManage && <Button icon={Plus} onClick={() => setAdding(true)}>Add {f.type === "SUPPLIER" ? "supplier" : f.type === "CUSTOMER" ? "customer" : "contact"}</Button>}
-      />
-      {sum && (
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <StatCard label="Customers owe you" value={money(sum.receivable)} accent="green" hint="Receivable" />
-          <StatCard label="You owe suppliers" value={money(sum.payable)} accent="amber" hint="Payable" />
+    <div className="flex flex-col gap-8">
+      {/* Banner Title */}
+      <div className="rounded-xl bg-[#044d73] px-4 py-4 text-white shadow-sm sm:px-6 sm:py-5">
+        <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Parties</h1>
+      </div>
+
+      {loadError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
         </div>
       )}
-      <div className="mb-4">
-        <Tabs value={f.type} onChange={(v) => set("type", v)} tabs={[{ value: "", label: "All" }, { value: "CUSTOMER", label: "Customers" }, { value: "SUPPLIER", label: "Suppliers" }]} />
+
+      {/* Top Status Dashboards — scoped to the selected tab */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-slate-400 bg-white p-4 shadow-sm flex items-center justify-between sm:p-5">
+          <div>
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+              Total {tabNoun}
+            </p>
+            <p className="text-2xl font-bold text-slate-800 mt-1 sm:text-3xl">
+              <AnimatedStatValue value={stats.totalCount} />
+            </p>
+          </div>
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-50 text-slate-600 sm:h-12 sm:w-12">
+            <Users className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-emerald-500 bg-white p-4 shadow-sm flex items-center justify-between sm:p-5">
+          <div>
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Active</p>
+            <p className="text-2xl font-bold text-slate-800 mt-1 sm:text-3xl">
+              <AnimatedStatValue value={stats.activeCount} />
+            </p>
+          </div>
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600 sm:h-12 sm:w-12">
+            <CheckCircle className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-amber-500 bg-white p-4 shadow-sm flex items-center justify-between sm:p-5">
+          <div>
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">Inactive</p>
+            <p className="text-2xl font-bold text-slate-800 mt-1 sm:text-3xl">
+              <AnimatedStatValue value={stats.inactiveCount} />
+            </p>
+          </div>
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600 sm:h-12 sm:w-12">
+            <XCircle className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </div>
       </div>
-      <TableCard
-        toolbar={
-          <>
-            <SearchInput className="w-full sm:w-64" value={f.search} onChange={(v) => set("search", v)} placeholder="Name, phone, code, tax ID…" />
-            <FilterSelect label="Balance" value={f.balance} onChange={(v) => set("balance", v)} options={[{ value: "", label: "Any balance" }, { value: "receivable", label: "Owes you" }, { value: "payable", label: "You owe" }, { value: "settled", label: "Settled" }]} />
-            <FilterSelect label="Status" value={f.status} onChange={(v) => set("status", v)} options={[{ value: "active", label: "Active" }, { value: "inactive", label: "Inactive" }, { value: "all", label: "All" }]} />
-            <FilterSelect label="Sort" value={f.sort} onChange={(v) => set("sort", v)} options={[{ value: "name", label: "Name" }, { value: "-balance", label: "Owes you most" }, { value: "balance", label: "You owe most" }, { value: "-createdAt", label: "Newest" }]} />
-          </>
-        }
-      >
-        <DataTable
-          rows={list.data?.items}
-          loading={list.loading}
-          error={list.error}
-          onRetry={list.reload}
-          rowKey={(r) => r.id}
-          onRowClick={(r) => router.push(`${base}/parties/${r.id}`)}
-          empty={
-            <EmptyState
-              icon={Users}
-              title={f.search ? "No one matches that search" : "No customers or suppliers yet"}
-              description="Add the people you buy from and sell to on credit so you can track balances and statements."
-              action={canManage && <Button icon={Plus} onClick={() => setAdding(true)}>Add contact</Button>}
+
+      {/* Control Actions Panel */}
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center w-full md:w-auto">
+          <div className="relative w-full sm:w-80">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder={`Search ${tabNoun}...`}
+              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
             />
-          }
-          columns={[
-            {
-              key: "n",
-              header: "Name",
-              cell: (r) => (
-                <div>
-                  <div className="font-semibold text-slate-800">{r.name} {!r.isActive && <Badge>Inactive</Badge>}</div>
-                  {r.code && <div className="text-xs text-slate-400">{r.code}</div>}
+          </div>
+
+          <select
+            value={typeTab}
+            onChange={(e) => handleTabChange(e.target.value as TypeTab)}
+            className="w-full sm:w-auto rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+          >
+            {TYPE_TABS.map((tab) => (
+              <option key={tab.value} value={tab.value}>
+                {tab.label}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
+            className="w-full sm:w-auto rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+          >
+            <option value="All">All Status</option>
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
+        </div>
+
+        {canManage && (<button
+          onClick={handleOpenAdd}
+          className="flex items-center justify-center gap-2 rounded-lg bg-[#044d73] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#033f60] w-full md:w-auto"
+        >
+          <UserPlus className="h-4 w-4" />
+          Add Party
+        </button>)}
+      </div>
+
+      {/* Data Section Container */}
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        {loading ? (
+          <div className="py-16">
+            <DotsLoader text={`Loading ${tabNoun}...`} size="sm" />
+          </div>
+        ) : (
+          <>
+            {/* Desktop Table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/50 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <th className="py-3 px-4">Party</th>
+                    <th className="py-3 px-4">Type</th>
+                    <th className="py-3 px-4">Contact Person</th>
+                    <th className="py-3 px-4">Contact</th>
+                    <th className="py-3 px-4">PAN No.</th>
+                    <th className="py-3 px-4">Payment Terms</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filtered.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center text-sm text-slate-400">
+                        No {tabNoun} match your search.
+                      </td>
+                    </tr>
+                  ) : (
+                    filtered.map((party) => (
+                      <tr key={party.id} className="hover:bg-slate-50/50 transition-colors group">
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#044d73]/10 text-sm font-semibold text-[#044d73] border border-[#044d73]/20">
+                              <Building2 className="h-4 w-4" />
+                            </div>
+                            <div>
+                              <span className="font-medium text-slate-900">{party.name}</span>
+                              {party.address && (
+                                <p className="text-xs text-slate-400 mt-0.5">{party.address}</p>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <TypeBadge type={party.partyType} />
+                        </td>
+                        <td className="py-4 px-4 text-slate-600 font-medium">
+                          {party.contactPerson || "—"}
+                        </td>
+                        <td className="py-4 px-4 text-slate-500">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-slate-700">{party.email || "—"}</span>
+                            <span className="text-xs text-slate-400 mt-0.5 font-mono">
+                              {party.phone || "—"}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4 text-slate-500 font-mono text-xs">
+                          {party.panVatNumber || "—"}
+                        </td>
+                        <td className="py-4 px-4 text-slate-600 text-xs">
+                          {party.paymentTerms ? (
+                            <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 font-medium text-slate-700 border border-slate-200/60">
+                              {party.paymentTerms}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">—</span>
+                          )}
+                        </td>
+                        <td className="py-4 px-4">
+                          <button
+                            type="button"
+                            onClick={() => canManage && toggleStatus(party)}
+                            title="Click to toggle status"
+                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium cursor-pointer transition-all hover:scale-105 active:scale-95 select-none ${
+                              party.status
+                                ? "bg-emerald-50 text-emerald-700 border border-emerald-200/50"
+                                : "bg-slate-100 text-slate-500 border border-slate-200"
+                            }`}
+                          >
+                            <span
+                              className={`mr-1.5 h-1.5 w-1.5 rounded-full ${party.status ? "bg-emerald-600" : "bg-slate-400"}`}
+                            />
+                            {party.status ? "Active" : "Inactive"}
+                          </button>
+                        </td>
+                        <td className="py-4 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity">
+                            <Link
+                              href={`${base}/parties/${party.id}/ledger`}
+                              className="rounded-md p-1.5 text-slate-400 hover:bg-[#044d73]/10 hover:text-[#044d73] transition-colors"
+                              title="View Party Ledger & Statement"
+                            >
+                              <FileText className="h-4 w-4" />
+                            </Link>
+                            {canManage && (<button
+                              onClick={() => handleOpenEdit(party)}
+                              className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-[#044d73] transition-colors"
+                              title="Edit Party"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>)}
+                            {canManage && (<button
+                              onClick={() => setDeleteTarget(party)}
+                              className="rounded-md p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              title="Remove Party"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>)}
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Cards */}
+            <div className="block md:hidden divide-y divide-slate-100">
+              {filtered.length === 0 ? (
+                <div className="py-12 text-center text-sm text-slate-400 px-4">
+                  No {tabNoun} match your search.
                 </div>
-              ),
-            },
-            { key: "t", header: "Type", hideBelow: "md", cell: (r) => <Badge tone={r.partyType === "SUPPLIER" ? "violet" : r.partyType === "BOTH" ? "blue" : "slate"}>{PARTY_TYPE_LABELS[r.partyType]}</Badge> },
-            { key: "p", header: "Phone", hideBelow: "sm", cell: (r) => r.phone ?? "—" },
-            { key: "c", header: "Credit limit", align: "right", hideBelow: "lg", cell: (r) => (r.creditLimit === null ? "—" : money(r.creditLimit)) },
-            {
-              key: "b",
-              header: "Balance",
-              align: "right",
-              cell: (r) =>
-                Math.abs(r.balance) < 0.005 ? (
-                  <span className="text-slate-400">Settled</span>
-                ) : r.balance > 0 ? (
-                  <span className="font-semibold text-emerald-700" title="They owe you">{money(r.balance)} <span className="text-[10px] font-bold">DR</span></span>
-                ) : (
-                  <span className="font-semibold text-amber-700" title="You owe them">{money(-r.balance)} <span className="text-[10px] font-bold">CR</span></span>
-                ),
-            },
-          ]}
-          footer={list.data && <Pagination page={list.page} totalPages={list.data.totalPages} total={list.data.total} onPage={list.setPage} />}
-        />
-      </TableCard>
-      {adding && <PartyFormModal defaultType={addType} onClose={() => setAdding(false)} onSaved={(p) => router.push(`${base}/parties/${p.id}`)} />}
+              ) : (
+                filtered.map((party) => (
+                  <div key={party.id} className="p-4 flex flex-col gap-4 bg-white">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#044d73]/10 text-sm font-semibold text-[#044d73] border border-[#044d73]/20">
+                          <Building2 className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="font-medium text-slate-900 text-sm truncate">{party.name}</h4>
+                          <div className="mt-1">
+                            <TypeBadge type={party.partyType} />
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => canManage && toggleStatus(party)}
+                        className={`shrink-0 inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium cursor-pointer transition-all select-none ${
+                          party.status
+                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200/50"
+                            : "bg-slate-100 text-slate-500 border border-slate-200"
+                        }`}
+                      >
+                        <span
+                          className={`mr-1.5 h-1.5 w-1.5 rounded-full ${party.status ? "bg-emerald-600" : "bg-slate-400"}`}
+                        />
+                        {party.status ? "Active" : "Inactive"}
+                      </button>
+                    </div>
+
+                    <div className="text-xs text-slate-500 bg-slate-50/50 rounded-lg p-3 space-y-1">
+                      {party.contactPerson && (
+                        <div className="flex items-center gap-2">
+                          <Users className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span className="text-slate-700 font-medium">{party.contactPerson}</span>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <Mail className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate text-slate-700 font-medium">{party.email || "—"}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Phone className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                        <span className="font-mono text-slate-600">{party.phone || "—"}</span>
+                      </div>
+                      {party.paymentTerms && (
+                        <div className="flex items-center gap-2">
+                          <CreditCard className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span className="text-slate-700 font-medium">Terms: {party.paymentTerms}</span>
+                        </div>
+                      )}
+                      {party.address && (
+                        <div className="flex items-center gap-2">
+                          <MapPin className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span className="text-slate-600">{party.address}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 border-t border-slate-100/80 pt-3">
+                      <Link
+                        href={`${base}/parties/${party.id}/ledger`}
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-[#044d73]/30 bg-[#044d73]/5 py-2 text-xs font-semibold text-[#044d73] hover:bg-[#044d73]/10 transition-colors"
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        Ledger
+                      </Link>
+                      {canManage && (<button
+                        onClick={() => handleOpenEdit(party)}
+                        className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-slate-200 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit
+                      </button>)}
+                      {canManage && (<button
+                        onClick={() => setDeleteTarget(party)}
+                        className="flex items-center justify-center gap-1.5 rounded-md border border-red-100 p-2 text-xs font-medium text-red-600 bg-red-50/30 hover:bg-red-50 transition-colors"
+                        title="Delete Party"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>)}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer Pagination Controls */}
+            <div className="flex flex-col gap-4 items-center justify-between border-t border-slate-100 bg-white px-6 py-4 sm:flex-row">
+              <div className="text-sm text-slate-500 hidden sm:block">
+                {pagination && `Showing ${parties.length} of ${pagination.total} ${tabNoun}`}
+              </div>
+
+              <div className="flex items-center justify-between w-full sm:w-auto gap-6">
+                <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                    disabled={currentPage === 1}
+                    className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+                    title="Previous Page"
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                    disabled={currentPage >= totalPages}
+                    className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+                    title="Next Page"
+                  >
+                    <ChevronRight className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Add/Edit Modal */}
+      {isModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl rounded-xl bg-white shadow-xl border border-slate-100 overflow-hidden my-auto"
+          >
+            <div className="relative flex items-center justify-center bg-[#044d73] p-4 text-white sm:p-6">
+              <div className="hidden h-10 w-10 items-center justify-center text-white sm:flex">
+                <UserPlus className="h-6 w-6" />
+              </div>
+              <h2 className="text-lg font-semibold text-white text-center sm:text-2xl">
+                {editingParty ? "Edit Party" : "Add New Party"}
+              </h2>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 rounded-md p-1 text-white/70 hover:bg-white/10 hover:text-white transition-colors sm:right-6"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="mx-4 mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:mx-6 sm:mt-6">
+                {errorMsg}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 sm:gap-5 sm:p-6">
+              <div className="sm:col-span-2">
+                <label className={labelCls}>Party Name</label>
+                <div className="relative">
+                  <Building2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                    placeholder="e.g. Arrow Pharmaceuticals Ltd"
+                    className={iconInputCls}
+                  />
+                </div>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className={labelCls}>Party Type</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["SUPPLIER", "CUSTOMER", "BOTH"] as PartyType[]).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setForm({ ...form, partyType: t })}
+                      className={`rounded-lg border px-2 py-2 text-xs sm:text-sm font-medium transition-all ${
+                        form.partyType === t
+                          ? "border-[#044d73] bg-[#044d73]/5 text-[#044d73] ring-2 ring-[#044d73]/10"
+                          : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                      }`}
+                    >
+                      {t === "BOTH" ? "Both" : TYPE_LABEL[t]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className={labelCls}>Contact Person</label>
+                <input
+                  value={form.contactPerson}
+                  onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
+                  placeholder="Enter contact name"
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <label className={labelCls}>Phone Number</label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                    placeholder="9XXXXXXXXX"
+                    className={iconInputCls}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={labelCls}>Email Address</label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={form.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                    placeholder="Enter email"
+                    className={iconInputCls}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={labelCls}>PAN No.</label>
+                <input
+                  value={form.panVatNumber}
+                  onChange={(e) => setForm({ ...form, panVatNumber: e.target.value })}
+                  placeholder="e.g. 301234567"
+                  className={inputCls}
+                />
+              </div>
+
+              <div>
+                <label className={labelCls}>Address</label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={form.address}
+                    onChange={(e) => setForm({ ...form, address: e.target.value })}
+                    placeholder="e.g. Balaju, Kathmandu"
+                    className={iconInputCls}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={labelCls}>Payment Terms</label>
+                <input
+                  value={form.paymentTerms}
+                  onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}
+                  placeholder="e.g. Net 30"
+                  className={inputCls}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 p-4 bg-slate-50/50 rounded-b-xl sm:flex-row sm:justify-end sm:gap-3 sm:p-6">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors w-full sm:w-auto"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveParty}
+                disabled={saving}
+                className="flex items-center justify-center gap-2 rounded-lg bg-[#044d73] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#033f60] disabled:opacity-50 w-full sm:w-auto"
+              >
+                {saving ? "Saving..." : editingParty ? "Save Changes" : "Add Party"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 sm:p-4 backdrop-blur-sm"
+          onClick={() => setDeleteTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-xl bg-white shadow-xl border border-slate-100 overflow-hidden mx-auto"
+          >
+            <div className="flex flex-col items-center gap-3 p-5 text-center sm:gap-4 sm:p-8">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-600 sm:h-14 sm:w-14">
+                <AlertTriangle className="h-6 w-6 sm:h-7 sm:w-7" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 sm:text-lg">Remove Party</h2>
+                <p className="mt-2 text-sm text-slate-500 px-2">
+                  Are you sure you want to remove{" "}
+                  <span className="font-semibold text-slate-700">{deleteTarget.name}</span>?
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 border-t border-slate-100 p-4 bg-slate-50/50 sm:p-6">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteParty}
+                disabled={deleting}
+                className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? "Removing..." : "Remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

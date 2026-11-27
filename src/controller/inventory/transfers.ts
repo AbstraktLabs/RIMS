@@ -139,7 +139,9 @@ export async function createTransfer(auth: AuthContext, input: CreateTransferInp
       })),
     );
 
-    if (input.dispatch) await dispatchInTx(tx, auth, t.id);
+    if (input.dispatch || input.receive) await dispatchInTx(tx, auth, t.id);
+    // one-step move between stores (the Inventory "Transfer Stock" pop-up)
+    if (input.receive) await receiveInTx(tx, auth, t.id);
     return t.id;
   });
   return getTransfer(auth, id);
@@ -151,7 +153,12 @@ export async function dispatchTransfer(auth: AuthContext, id: string) {
 }
 
 export async function receiveTransfer(auth: AuthContext, id: string) {
-  await db.transaction(async (tx) => {
+  await db.transaction((tx) => receiveInTx(tx, auth, id));
+  return getTransfer(auth, id);
+}
+
+async function receiveInTx(tx: Tx, auth: AuthContext, id: string) {
+  {
     const t = await lockTransfer(tx, auth, id);
     if (t.status !== "IN_TRANSIT") throw conflict("Only transfers in transit can be received");
     await resolveLocationId(tx, auth, t.toLocationId); // must have access to the destination
@@ -195,8 +202,7 @@ export async function receiveTransfer(auth: AuthContext, id: string) {
       .update(stockTransfers)
       .set({ status: "RECEIVED", receivedAt: new Date(), receivedByUserId: auth.userId })
       .where(eq(stockTransfers.id, id));
-  });
-  return getTransfer(auth, id);
+  }
 }
 
 export async function cancelTransfer(auth: AuthContext, id: string) {

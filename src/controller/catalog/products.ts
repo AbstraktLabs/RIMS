@@ -57,12 +57,12 @@ async function exists(tx: Tx, table: typeof categories | typeof brands | typeof 
 }
 
 async function normaliseProduct(tx: Tx, orgId: string, input: CreateProductInput, settings: OrgSettings) {
+  // Like the pharmacy IMS, every purchase line becomes a batch, so batches are
+  // always on. Expiry is opt-in per item (food, cosmetics …).
   const trackExpiry = input.trackExpiry;
-  const trackBatches = input.trackBatches || trackExpiry; // expiry dates live on batches
+  const trackBatches: boolean = true;
   const trackSerials = input.trackSerials;
 
-  if (trackBatches && !settings.enableBatchTracking) throw badRequest("Batch tracking is turned off in Settings");
-  if (trackExpiry && !settings.enableExpiryTracking) throw badRequest("Expiry tracking is turned off in Settings");
   if (trackSerials && !settings.enableSerialTracking) throw badRequest("Serial-number tracking is turned off in Settings");
 
   // references must belong to this tenant
@@ -104,7 +104,6 @@ async function normaliseProduct(tx: Tx, orgId: string, input: CreateProductInput
       { ...v, optionValues: {}, name: "Default", sku: v.sku || generateSku(input.name), isDefault: true, isActive: true },
     ];
   } else {
-    if (!settings.enableVariants) throw badRequest("Variants are turned off in Settings");
     const seen = new Set<string>();
     variants = input.variants.map((v) => {
       const keys = Object.keys(v.optionValues);
@@ -215,11 +214,6 @@ export async function updateProduct(auth: AuthContext, id: string, input: Create
       if (v.id && !currentIds.has(v.id)) throw badRequest("A variant does not belong to this product");
     }
 
-    // tracking rules can't change while stock exists — lots/serials would be inconsistent
-    const trackingChanged =
-      existing.trackBatches !== product.trackBatches ||
-      existing.trackSerials !== product.trackSerials ||
-      existing.trackExpiry !== product.trackExpiry;
     const [stock] = await tx
       .select({
         nonZero: sql<number>`count(*) filter (where ${stockLevels.quantity} <> 0)::int`,
@@ -228,6 +222,13 @@ export async function updateProduct(auth: AuthContext, id: string, input: Create
       .from(stockLevels)
       .innerJoin(productVariants, eq(productVariants.id, stockLevels.variantId))
       .where(eq(productVariants.productId, id));
+    // tracking rules can't change while stock exists — lots/serials would be inconsistent.
+    // Older items stocked before batches were always on keep their batch-less stock.
+    if (!existing.trackBatches && stock.nonZero > 0) product.trackBatches = false;
+    const trackingChanged =
+      existing.trackBatches !== product.trackBatches ||
+      existing.trackSerials !== product.trackSerials ||
+      existing.trackExpiry !== product.trackExpiry;
     if (trackingChanged && stock.nonZero > 0) {
       throw conflict("Batch, expiry and serial tracking can only be changed while the product has no stock");
     }

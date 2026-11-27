@@ -6,6 +6,7 @@ import {
   nullableText,
   pagination,
   paymentMethod,
+  paymentType,
   percent,
   quantity,
   serialList,
@@ -54,6 +55,9 @@ export const purchaseLine = orderLine.extend({
   manufacturingDate: isoDate.nullable().optional(),
   expiryDate: isoDate.nullable().optional(),
   serials: serialList,
+  lotNote: nullableText(500),
+  mrp: money.nullable().optional(), // updates the variant's MRP
+  sellingPrice: money.optional(), // updates the variant's sale price
 });
 
 export const purchaseSchema = z.object({
@@ -67,6 +71,7 @@ export const purchaseSchema = z.object({
   discount: money.default(0),
   otherCharges: money.default(0),
   roundOff: signedMoney.default(0),
+  paymentType: paymentType.optional(),
   note: nullableText(2000),
   items: z.array(purchaseLine).min(1).max(500),
   payments: z.array(paymentInput).max(10).default([]),

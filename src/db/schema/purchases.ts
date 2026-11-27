@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, date, timestamp, index, uniqueIndex, check, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, date, timestamp, index, uniqueIndex, check, jsonb, integer, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createdAt, money, percent, qty, unitCost, updatedAt } from "./_columns";
 import { organizations, locations } from "./tenancy";
@@ -106,6 +106,8 @@ export const purchases = pgTable(
     grandTotal: money("grand_total").notNull(),
     paidAmount: money("paid_amount").notNull().default("0"),
     paymentStatus: paymentStatusEnum("payment_status").notNull().default("UNPAID"),
+    // how the bill is settled: CASH, CREDIT, BANK_TRANSFER, CHEQUE, MOBILE_PAYMENT
+    paymentType: varchar("payment_type", { length: 20 }),
     note: text("note"),
     createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
     voidedAt: timestamp("voided_at", { withTimezone: true }),
@@ -133,6 +135,7 @@ export const purchaseItems = pgTable(
     purchaseOrderItemId: uuid("purchase_order_item_id").references(() => purchaseOrderItems.id, {
       onDelete: "set null",
     }),
+    position: integer("position").notNull().default(0), // line order on the bill
     variantId: uuid("variant_id")
       .notNull()
       .references(() => productVariants.id),

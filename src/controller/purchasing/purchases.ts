@@ -34,10 +34,24 @@ import { refreshOrderReceipt } from "./orders";
 import { qcol } from "../_shared/sql";
 
 export async function createPurchase(auth: AuthContext, input: PurchaseInput) {
-  const id = await db.transaction(async (tx) => {
+  const id = await db.transaction((tx) => writePurchase(tx, auth, input, null));
+  return getPurchase(auth, id);
+}
+
+/**
+ * Inserts a purchase, or (when `existing` is given) rewrites one in place after its old
+ * stock and payments have been reversed. Keeps the purchase number on edit.
+ */
+async function writePurchase(
+  tx: Tx,
+  auth: AuthContext,
+  input: PurchaseInput,
+  existing: { id: string; number: string; locationId: string } | null,
+) {
+  {
     const settings = await getSettings(tx, auth.organizationId);
     const party = await loadParty(tx, auth.organizationId, input.partyId, "SUPPLIER");
-    const locationId = await resolveLocationId(tx, auth, input.locationId);
+    const locationId = existing ? existing.locationId : await resolveLocationId(tx, auth, input.locationId);
     const today = todayIn(settings.timezone);
     const purchaseDate = input.purchaseDate ?? today;
     const variants = await loadVariants(
@@ -92,10 +106,8 @@ export async function createPurchase(auth: AuthContext, input: PurchaseInput) {
     const paid = round2(input.payments.reduce((s, p) => s + p.amount, 0));
     if (paid > totals.grandTotal + 0.004) throw badRequest("Payment is more than the bill total");
 
-    const number = await nextDocumentNumber(tx, auth.organizationId, "PURCHASE");
-    const [purchase] = await tx
-      .insert(purchases)
-      .values({
+    const number = existing ? existing.number : await nextDocumentNumber(tx, auth.organizationId, "PURCHASE");
+    const header = {
         organizationId: auth.organizationId,
         locationId,
         partyId: party.id,
@@ -111,10 +123,12 @@ export async function createPurchase(auth: AuthContext, input: PurchaseInput) {
         taxAmount: money(totals.taxAmount),
         roundOff: money(totals.roundOff),
         grandTotal: money(totals.grandTotal),
+        paymentType: input.paymentType ?? null,
         note: input.note ?? null,
-        createdByUserId: auth.userId,
-      })
-      .returning({ id: purchases.id });
+    };
+    const [purchase] = existing
+      ? await tx.update(purchases).set(header).where(eq(purchases.id, existing.id)).returning({ id: purchases.id })
+      : await tx.insert(purchases).values({ ...header, createdByUserId: auth.userId }).returning({ id: purchases.id });
 
     for (let i = 0; i < lines.length; i++) {
       const l = lines[i];
@@ -127,6 +141,7 @@ export async function createPurchase(auth: AuthContext, input: PurchaseInput) {
         .insert(purchaseItems)
         .values({
           purchaseId: purchase.id,
+          position: i,
           purchaseOrderItemId: l.purchaseOrderItemId ?? null,
           variantId: v.id,
           quantity: qtyStr(l.quantity),
@@ -159,13 +174,22 @@ export async function createPurchase(auth: AuthContext, input: PurchaseInput) {
           expiryDate: l.expiryDate ?? null,
           supplierId: party.id,
           purchaseItemId: item.id,
+          note: l.lotNote ?? null,
         },
         serials: v.trackSerials ? { numbers: l.serials, mode: "create", purchaseItemId: item.id } : undefined,
       });
       if (lotId) await tx.update(purchaseItems).set({ lotId }).where(eq(purchaseItems.id, item.id));
 
       // last purchase cost becomes the variant's reference cost
-      await tx.update(productVariants).set({ costPrice: money(landed[i]) }).where(eq(productVariants.id, v.id));
+      // (the bill can also set the item's MRP and sale price, like the pharmacy batch form)
+      await tx
+        .update(productVariants)
+        .set({
+          costPrice: money(landed[i]),
+          ...(l.mrp !== undefined ? { mrp: l.mrp === null ? null : money(l.mrp) } : {}),
+          ...(l.sellingPrice !== undefined ? { sellingPrice: money(l.sellingPrice) } : {}),
+        })
+        .where(eq(productVariants.id, v.id));
 
       if (l.purchaseOrderItemId) {
         await tx
@@ -193,8 +217,7 @@ export async function createPurchase(auth: AuthContext, input: PurchaseInput) {
     await refreshPurchasePayment(tx, purchase.id);
     if (input.purchaseOrderId) await refreshOrderReceipt(tx, input.purchaseOrderId);
     return purchase.id;
-  });
-  return getPurchase(auth, id);
+  }
 }
 
 async function lockPurchase(tx: Tx, auth: AuthContext, id: string) {
@@ -207,17 +230,15 @@ async function lockPurchase(tx: Tx, auth: AuthContext, id: string) {
   return p;
 }
 
-export async function voidPurchase(auth: AuthContext, id: string, reason: string) {
-  await db.transaction(async (tx) => {
-    const p = await lockPurchase(tx, auth, id);
-    if (p.status === "VOID") throw conflict("This purchase is already void");
-    await resolveLocationId(tx, auth, p.locationId);
-
+/** Takes the purchase's goods back off the shelf and voids its payments. */
+async function reversePurchaseEffects(tx: Tx, auth: AuthContext, p: typeof purchases.$inferSelect, note: string, verb: string) {
+  const id = p.id;
+  {
     const [{ returns }] = await tx
       .select({ returns: sql<number>`count(*)::int` })
       .from(purchaseReturns)
       .where(and(eq(purchaseReturns.purchaseId, id), ne(purchaseReturns.status, "VOID")));
-    if (returns > 0) throw conflict("Void the purchase returns made against this purchase first");
+    if (returns > 0) throw conflict(`Can't ${verb}: goods from this purchase were returned to the supplier. Delete that return first`);
 
     const items = await tx.select().from(purchaseItems).where(eq(purchaseItems.purchaseId, id));
     const variants = await loadVariants(
@@ -245,7 +266,7 @@ export async function voidPurchase(auth: AuthContext, id: string, reason: string
         referenceType: "PURCHASE",
         referenceId: id,
         userId: auth.userId,
-        note: `Void: ${reason}`,
+        note,
         lotId: item.lotId,
         serials,
         serialStatus: "RETURNED_TO_SUPPLIER",
@@ -253,7 +274,7 @@ export async function voidPurchase(auth: AuthContext, id: string, reason: string
         allowExpired: true,
       }).catch((err) => {
         throw conflict(
-          `Can't void: ${v.displayName} from this purchase has already been sold or moved. ${err instanceof Error ? err.message : ""}`.trim(),
+          `Can't ${verb}: ${v.displayName} from this purchase has already been sold or moved. ${err instanceof Error ? err.message : ""}`.trim(),
         );
       });
       if (item.purchaseOrderItemId) {
@@ -264,11 +285,35 @@ export async function voidPurchase(auth: AuthContext, id: string, reason: string
       }
     }
     await voidPaymentsFor(tx, { purchaseId: id }, auth.userId);
+  }
+}
+
+export async function voidPurchase(auth: AuthContext, id: string, reason: string) {
+  await db.transaction(async (tx) => {
+    const p = await lockPurchase(tx, auth, id);
+    if (p.status === "VOID") throw conflict("This purchase is already void");
+    await resolveLocationId(tx, auth, p.locationId);
+    await reversePurchaseEffects(tx, auth, p, `Void: ${reason}`, reason === "Deleted" ? "delete" : "void");
     await tx
       .update(purchases)
       .set({ status: "VOID", voidedAt: new Date(), voidedByUserId: auth.userId, voidReason: reason })
       .where(eq(purchases.id, id));
     await refreshPurchasePayment(tx, id);
+    if (p.purchaseOrderId) await refreshOrderReceipt(tx, p.purchaseOrderId);
+  });
+  return getPurchase(auth, id);
+}
+
+/** Edits a posted purchase: fails if any of its goods were already sold or moved. */
+export async function updatePurchase(auth: AuthContext, id: string, input: PurchaseInput) {
+  await db.transaction(async (tx) => {
+    const p = await lockPurchase(tx, auth, id);
+    if (p.status === "VOID") throw conflict("A deleted purchase can't be edited");
+    await resolveLocationId(tx, auth, p.locationId);
+    await reversePurchaseEffects(tx, auth, p, "Edited", "edit");
+    if (p.purchaseOrderId) await refreshOrderReceipt(tx, p.purchaseOrderId);
+    await tx.delete(purchaseItems).where(eq(purchaseItems.purchaseId, id));
+    await writePurchase(tx, auth, { ...input, purchaseOrderId: p.purchaseOrderId ?? undefined }, { id, number: p.number, locationId: p.locationId });
     if (p.purchaseOrderId) await refreshOrderReceipt(tx, p.purchaseOrderId);
   });
   return getPurchase(auth, id);

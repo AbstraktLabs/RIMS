@@ -4,28 +4,21 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  ArrowLeftRight,
   BarChart3,
   Boxes,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ClipboardList,
   FileText,
   Layers,
   LayoutDashboard,
   LogOut,
   MapPin,
   Menu,
-  Package,
   Receipt,
-  RotateCcw,
-  ScanBarcode,
   Settings,
   ShoppingCart,
-  Tags,
-  Truck,
-  UserCog,
+  UserPlus,
   Users,
   Wallet,
   X,
@@ -39,6 +32,8 @@ type NavItem = {
   icon: LucideIcon;
   perm?: string | string[];
   exact?: boolean;
+  /** active when the path contains this (e.g. any party's ledger) */
+  match?: string;
   /** shown only when the business has this feature switched on */
   feature?: (s: OrgSettings) => boolean;
 };
@@ -46,71 +41,39 @@ type NavGroup = { id: string; label: string; icon: LucideIcon; items: NavItem[] 
 type Entry = NavItem | NavGroup;
 const isGroup = (e: Entry): e is NavGroup => "items" in e;
 
+// Same menu as the pharmacy IMS: Operations, Parties, Finance, Settings.
 function entries(): Entry[] {
   return [
     { href: "", label: "Dashboard", icon: LayoutDashboard, perm: "dashboard.view", exact: true },
-    { href: "/pos", label: "Point of Sale", icon: ScanBarcode, perm: "sales.manage" },
     {
-      id: "sales",
-      label: "Sales",
-      icon: ShoppingCart,
-      items: [
-        { href: "/sales", label: "Sales & invoices", icon: ShoppingCart, perm: "sales.view" },
-        { href: "/sale-returns", label: "Sale returns", icon: RotateCcw, perm: "sales.view" },
-      ],
-    },
-    {
-      id: "purchasing",
-      label: "Purchasing",
-      icon: Truck,
-      items: [
-        { href: "/purchase-orders", label: "Purchase orders", icon: ClipboardList, perm: "purchases.view" },
-        { href: "/purchases", label: "Purchases", icon: Receipt, perm: "purchases.view" },
-        { href: "/purchase-returns", label: "Purchase returns", icon: RotateCcw, perm: "purchases.view" },
-      ],
-    },
-    {
-      id: "catalog",
-      label: "Catalogue",
-      icon: Package,
-      items: [
-        { href: "/products", label: "Products", icon: Package, perm: "products.view" },
-        { href: "/categories", label: "Categories & brands", icon: Tags, perm: "products.view" },
-      ],
-    },
-    {
-      id: "inventory",
-      label: "Inventory",
+      id: "operations",
+      label: "Operations",
       icon: Boxes,
       items: [
-        { href: "/inventory", label: "Stock levels", icon: Boxes, perm: "inventory.view", exact: true },
-        { href: "/inventory/lots", label: "Batches & expiry", icon: Layers, perm: "inventory.view", feature: (s) => s.enableBatchTracking || s.enableExpiryTracking },
-        { href: "/inventory/serials", label: "Serial numbers", icon: ScanBarcode, perm: "inventory.view", feature: (s) => s.enableSerialTracking },
-        { href: "/inventory/movements", label: "Stock movements", icon: ArrowLeftRight, perm: "inventory.view" },
-        { href: "/inventory/adjustments", label: "Adjustments", icon: ClipboardList, perm: "inventory.view" },
-        { href: "/inventory/transfers", label: "Transfers", icon: Truck, perm: "inventory.view", feature: (s) => s.enableMultiLocation },
+        { href: "/inventory", label: "Inventory", icon: Boxes, perm: "products.view" },
+        { href: "/batches", label: "Batches", icon: Layers, perm: "inventory.view" },
+        { href: "/purchase", label: "Purchase", icon: Receipt, perm: "purchases.view" },
+        { href: "/sales", label: "Sales", icon: ShoppingCart, perm: "sales.view" },
       ],
     },
-    { href: "/parties", label: "Customers & suppliers", icon: Users, perm: "parties.view" },
+    { href: "/parties", label: "Parties", icon: Users, perm: "parties.view", exact: true },
     {
       id: "finance",
       label: "Finance",
       icon: Wallet,
       items: [
-        { href: "/finance/payments", label: "Payments", icon: Wallet, perm: "finance.view" },
-        { href: "/finance/entries", label: "Income & expenses", icon: FileText, perm: "finance.view" },
-        { href: "/finance/outstanding", label: "Outstanding", icon: Receipt, perm: "finance.view" },
-        { href: "/transactions", label: "All transactions", icon: ArrowLeftRight, perm: ["finance.view", "reports.view"] },
+        { href: "/parties/ledger", label: "Party Ledger", icon: FileText, perm: "parties.view", match: "/ledger" },
+        { href: "/expense", label: "Expense", icon: Wallet, perm: "finance.view" },
+        { href: "/analytics", label: "Analytics", icon: BarChart3, perm: "reports.view" },
       ],
     },
-    { href: "/reports", label: "Reports", icon: BarChart3, perm: "reports.view" },
     {
       id: "settings",
       label: "Settings",
       icon: Settings,
       items: [
-        { href: "/settings", label: "Business settings", icon: Settings, perm: "settings.view" },
-        { href: "/settings/staff", label: "Staff & roles", icon: UserCog, perm: "users.view" },
+        { href: "/settings", label: "General", icon: Settings, perm: "settings.view", exact: true },
+        { href: "/settings/add-account", label: "Add Account", icon: UserPlus, perm: "users.view" },
       ],
     },
   ];
@@ -125,6 +88,8 @@ function useNav() {
     .filter((e) => (isGroup(e) ? e.items.length > 0 : visible(e)));
   const isActive = (i: NavItem) => {
     const href = base + i.href;
+    if (i.match) return pathname.startsWith(base + "/parties/") && pathname.endsWith(i.match);
+    if (i.href === "/parties") return pathname === href || (pathname.startsWith(href + "/") && !pathname.endsWith("/ledger"));
     return i.exact ? pathname === href : pathname === href || pathname.startsWith(href + "/");
   };
   return { list, isActive, base };
@@ -184,11 +149,11 @@ function NavLink({ item, collapsed, indent, onNavigate }: { item: NavItem; colla
       onClick={onNavigate}
       title={collapsed ? item.label : undefined}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-3 rounded-full py-2.5 text-sm font-semibold transition-all ${
+      className={`flex items-center gap-3 rounded-full py-3 text-sm font-semibold transition-all ${
         collapsed ? "justify-center px-0" : indent ? "pl-10 pr-4" : "px-4"
       } ${active ? "bg-white text-[#044d73] shadow-md" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
     >
-      <Icon size={18} className="shrink-0" />
+      <Icon size={19} className="shrink-0" />
       {!collapsed && <span className="truncate">{item.label}</span>}
     </Link>
   );
@@ -222,11 +187,11 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
               type="button"
               aria-expanded={isOpen}
               onClick={() => setOpen((o) => ({ ...o, [e.id]: !o[e.id] }))}
-              className={`flex w-full items-center gap-3 rounded-full px-4 py-2.5 text-sm font-semibold transition-all hover:bg-white/10 hover:text-white ${
+              className={`flex w-full items-center gap-3 rounded-full px-4 py-3 text-sm font-semibold transition-all hover:bg-white/10 hover:text-white ${
                 hasActive && !isOpen ? "text-white" : "text-white/70"
               }`}
             >
-              <Icon size={18} className="shrink-0" />
+              <Icon size={19} className="shrink-0" />
               <span className="flex-1 truncate text-left">{e.label}</span>
               <ChevronDown size={15} className={`shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`} />
             </button>
@@ -244,8 +209,8 @@ function NavList({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: (
   );
 }
 
-function UserFooter({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?: () => void }) {
-  const { session, logout, base } = useSession();
+function UserFooter({ collapsed }: { collapsed: boolean }) {
+  const { session, logout } = useSession();
   const initials = session.user.name
     .split(" ")
     .filter(Boolean)
@@ -254,30 +219,25 @@ function UserFooter({ collapsed, onNavigate }: { collapsed: boolean; onNavigate?
     .join("")
     .toUpperCase();
   return (
-    <div className="space-y-1 border-t border-white/10 px-3 py-3">
-      <Link
-        href={`${base}/profile`}
-        onClick={onNavigate}
-        title={collapsed ? session.user.name : "My profile"}
-        className={`flex items-center gap-3 rounded-2xl py-2 hover:bg-white/10 ${collapsed ? "justify-center" : "px-3"}`}
-      >
+    <div className="space-y-2 border-t border-white/10 px-3 py-4">
+      <div className={`flex items-center gap-3 ${collapsed ? "justify-center" : "px-3"}`} title={collapsed ? session.user.name : undefined}>
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-sm font-bold text-white">{initials}</div>
         {!collapsed && (
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-white">{session.user.name}</p>
-            <p className="truncate text-[11px] font-medium text-white/60">{session.role}</p>
+            <p className="truncate text-[11px] font-medium text-white/60">{session.user.email}</p>
           </div>
         )}
-      </Link>
+      </div>
       <button
         type="button"
         onClick={logout}
         title={collapsed ? "Log out" : undefined}
-        className={`flex w-full items-center gap-3 rounded-full py-2.5 text-sm font-semibold text-white/80 transition-colors hover:bg-white/10 hover:text-red-300 ${
+        className={`flex w-full items-center gap-3.5 rounded-full py-3.5 text-sm font-semibold text-white/80 transition-colors hover:bg-white/10 hover:text-red-300 ${
           collapsed ? "justify-center" : "px-4"
         }`}
       >
-        <LogOut size={18} className="shrink-0" />
+        <LogOut size={20} className="shrink-0" />
         {!collapsed && <span>Log out</span>}
       </button>
     </div>
@@ -354,7 +314,7 @@ export function Sidebar() {
             </div>
             <LocationSwitcher collapsed={false} />
             <NavList collapsed={false} onNavigate={() => setMobileOpen(false)} />
-            <UserFooter collapsed={false} onNavigate={() => setMobileOpen(false)} />
+            <UserFooter collapsed={false} />
           </aside>
         </div>
       )}

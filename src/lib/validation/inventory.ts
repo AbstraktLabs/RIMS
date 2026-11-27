@@ -44,6 +44,7 @@ export const createTransferSchema = z
     transferDate: isoDate.optional(),
     note: nullableText(1000),
     dispatch: z.boolean().default(false), // dispatch immediately instead of saving a draft
+    receive: z.boolean().default(false), // dispatch and receive at once: stock moves immediately
     items: z
       .array(
         z.object({

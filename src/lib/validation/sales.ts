@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { dateRange, isoDate, money, nullableText, pagination, paymentMethod, quantity, serialList, signedMoney, taxMode, uuid } from "./common";
+import { dateRange, isoDate, money, nullableText, pagination, paymentMethod, paymentType, percent, quantity, serialList, signedMoney, taxMode, uuid } from "./common";
 import { paymentInput } from "./purchasing";
 
 export const saleSchema = z.object({
@@ -15,6 +15,7 @@ export const saleSchema = z.object({
   discount: money.default(0),
   otherCharges: money.default(0),
   roundOff: signedMoney.default(0),
+  paymentType: paymentType.optional(),
   note: nullableText(2000),
   items: z
     .array(
@@ -23,6 +24,7 @@ export const saleSchema = z.object({
         quantity,
         unitPrice: money.optional(), // defaults to the variant's price for the price level
         discount: money.default(0),
+        taxRate: percent.optional(), // defaults to the product's tax rate
         lotId: uuid.nullable().optional(),
         serials: serialList,
       }),

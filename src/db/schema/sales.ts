@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, text, date, timestamp, boolean, index, uniqueIndex, check, jsonb, type AnyPgColumn } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, text, date, timestamp, boolean, index, uniqueIndex, check, jsonb, integer, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createdAt, money, percent, qty, unitCost, updatedAt } from "./_columns";
 import { organizations, locations } from "./tenancy";
@@ -49,6 +49,8 @@ export const sales = pgTable(
     paymentStatus: paymentStatusEnum("payment_status").notNull().default("UNPAID"),
     amountTendered: money("amount_tendered"), // POS cash handed over
     changeGiven: money("change_given").notNull().default("0"),
+    // how the invoice is settled: CASH, CREDIT, BANK_TRANSFER, CHEQUE, MOBILE_PAYMENT
+    paymentType: varchar("payment_type", { length: 20 }),
     note: text("note"),
     createdByUserId: uuid("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
     voidedAt: timestamp("voided_at", { withTimezone: true }),
@@ -79,6 +81,7 @@ export const saleItems = pgTable(
     saleId: uuid("sale_id")
       .notNull()
       .references(() => sales.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0), // line order on the invoice
     variantId: uuid("variant_id")
       .notNull()
       .references(() => productVariants.id),

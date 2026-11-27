@@ -7,6 +7,28 @@ Stack: Next.js (App Router + API routes) · PostgreSQL · Drizzle ORM (`pg` driv
 Zod · Tailwind CSS. Same architecture as the Pharmacy IMS, with its own database,
 migrations and configuration.
 
+## Screens
+
+The app follows the Pharmacy IMS screens and flow, adapted for retail and for
+several locations:
+
+| Sidebar | What it does |
+|---|---|
+| Dashboard | Sales, purchases, expenses and profit for a period, stock watch-list, recent activity |
+| Inventory | Items with stock per size/colour; Add Item pop-up; stock transfer pop-up |
+| Batches | Every batch with expiry status; return a batch to its supplier (refund, credit note or replacement) or write it off |
+| Purchase | Supplier bills. Each line goes into a batch; cash = paid, credit = unpaid with part payments |
+| Sales | Invoices sold from a chosen batch; tax invoice print; payment status and part payments |
+| Parties | Customers and suppliers |
+| Party Ledger | Account statement per party with BS dates, printable |
+| Expense | Operating expenses by category |
+| Analytics | Revenue, cost of goods, expenses (including stock written off) and net profit by month or year |
+| Settings | Organization, user, password and locations; Add Account for Owner / Manager / Viewer logins |
+
+The location switcher in the sidebar picks which shop's stock and documents you
+see. There is no POS screen. Purchase orders, separate return documents and serial
+numbers still exist in the API and database but have no screens.
+
 ## Local development
 
 Requirements: Node 20+, pnpm, PostgreSQL 16+, Redis.
@@ -52,6 +74,10 @@ E2E_BASE_URL=http://localhost:3000 pnpm test:e2e hardening  # one suite
 | `integration` | Dashboard counts vs stock filters, reorder suggestions, product links on document lines |
 | `hardening` | Token tampering, refresh-token replay and the two-tab race, login throttling, spoofed `X-Forwarded-For`, Manager/Viewer permissions, deactivated staff, concurrent sales of the last unit, gap-free numbering under load, bad input, suspended and expired-trial shops |
 | `isolation` | Every route that takes an id, called by another business: all must answer 404 and change nothing |
+| `edit-delete` | Editing and deleting bills and invoices, with stock and balances following |
+| `vouchers` | The Purchase and Sales screens: batches, cash/credit, status and part payments, party ledger statement |
+| `batches` | Expiry status, supplier returns and settlement, write-offs in Analytics, one-step transfers |
+| `expenses` | The Expense screen: categories, add/edit/delete, filters |
 
 The suspended / expired-trial checks need a local test super admin: set
 `E2E_PLATFORM_EMAIL` and `E2E_PLATFORM_PASSWORD` (they are skipped otherwise).

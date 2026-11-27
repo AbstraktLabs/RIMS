@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import type { z } from "zod";
 import { db, type Tx } from "@/db";
 import {
@@ -44,9 +44,23 @@ function splitAmount(total: number, parts: number[]): number[] {
 }
 
 export async function createSale(auth: AuthContext, input: SaleInput) {
-  const id = await db.transaction(async (tx) => {
+  const id = await db.transaction((tx) => writeSale(tx, auth, input, null));
+  return getSale(auth, id);
+}
+
+/**
+ * Inserts a sale, or (when `existing` is given) rewrites one in place after its old
+ * stock and payments have been reversed. Keeps the invoice number on edit.
+ */
+async function writeSale(
+  tx: Tx,
+  auth: AuthContext,
+  input: SaleInput,
+  existing: { id: string; invoiceNumber: string; locationId: string } | null,
+) {
+  {
     const settings = await getSettings(tx, auth.organizationId);
-    const locationId = await resolveLocationId(tx, auth, input.locationId);
+    const locationId = existing ? existing.locationId : await resolveLocationId(tx, auth, input.locationId);
     const party = input.partyId ? await loadParty(tx, auth.organizationId, input.partyId, "CUSTOMER") : null;
     const today = todayIn(settings.timezone);
     const variants = await loadVariants(
@@ -64,11 +78,12 @@ export async function createSale(auth: AuthContext, input: SaleInput) {
     });
 
     const taxMode = input.taxMode ?? (settings.pricesIncludeTax ? "INCLUSIVE" : "EXCLUSIVE");
+    // tax is only charged by tax-registered shops, unless the invoice asks for it explicitly
+    const effectiveTaxMode = settings.taxRegistered || input.taxMode ? taxMode : "EXEMPT";
     const totals = totalsOrBadRequest(
-      lines.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discount: l.discount, taxRate: l.variant.taxRate })),
-      { taxMode: settings.taxRegistered ? taxMode : "EXEMPT", discount: input.discount, otherCharges: input.otherCharges, roundOff: input.roundOff },
+      lines.map((l) => ({ quantity: l.quantity, unitPrice: l.unitPrice, discount: l.discount, taxRate: l.taxRate ?? l.variant.taxRate })),
+      { taxMode: effectiveTaxMode, discount: input.discount, otherCharges: input.otherCharges, roundOff: input.roundOff },
     );
-    const effectiveTaxMode = settings.taxRegistered ? taxMode : "EXEMPT";
 
     // payments: anything over the total must be cash, and is handed back as change
     const tendered = round2(input.payments.reduce((s, p) => s + p.amount, 0));
@@ -92,10 +107,8 @@ export async function createSale(auth: AuthContext, input: SaleInput) {
 
     const saleDay = input.saleDate ?? today;
     if (saleDay > today) throw badRequest("Sale date can't be in the future");
-    const invoiceNumber = await nextDocumentNumber(tx, auth.organizationId, "SALE");
-    const [sale] = await tx
-      .insert(sales)
-      .values({
+    const invoiceNumber = existing ? existing.invoiceNumber : await nextDocumentNumber(tx, auth.organizationId, "SALE");
+    const header = {
         organizationId: auth.organizationId,
         locationId,
         invoiceNumber,
@@ -115,10 +128,12 @@ export async function createSale(auth: AuthContext, input: SaleInput) {
         grandTotal: money(totals.grandTotal),
         amountTendered: cashTendered > 0 ? money(cashTendered) : null,
         changeGiven: money(change),
+        paymentType: input.paymentType ?? null,
         note: input.note ?? null,
-        createdByUserId: auth.userId,
-      })
-      .returning({ id: sales.id });
+    };
+    const [sale] = existing
+      ? await tx.update(sales).set(header).where(eq(sales.id, existing.id)).returning({ id: sales.id })
+      : await tx.insert(sales).values({ ...header, createdByUserId: auth.userId }).returning({ id: sales.id });
 
     let totalCost = 0;
     for (let i = 0; i < lines.length; i++) {
@@ -152,6 +167,7 @@ export async function createSale(auth: AuthContext, input: SaleInput) {
           .insert(saleItems)
           .values({
             saleId: sale.id,
+            position: i * 1000 + k,
             variantId: v.id,
             lotId: a.lotId,
             quantity: qtyStr(a.quantity),
@@ -194,8 +210,7 @@ export async function createSale(auth: AuthContext, input: SaleInput) {
     }
     await refreshSalePayment(tx, sale.id);
     return sale.id;
-  });
-  return getSale(auth, id);
+  }
 }
 
 async function lockSale(tx: Tx, auth: AuthContext, id: string) {
@@ -209,16 +224,15 @@ async function lockSale(tx: Tx, auth: AuthContext, id: string) {
   return s;
 }
 
-export async function voidSale(auth: AuthContext, id: string, reason: string) {
-  await db.transaction(async (tx) => {
-    const s = await lockSale(tx, auth, id);
-    if (s.status === "VOID") throw conflict("This sale is already void");
-    const [{ returns }] = await tx
-      .select({ returns: sql<number>`count(*)::int` })
-      .from(saleReturns)
-      .where(and(eq(saleReturns.saleId, id), eq(saleReturns.status, "POSTED")));
-    if (returns > 0) throw conflict("Void the returns made against this sale first");
-
+/** Puts the sale's goods back on the shelf and voids its payments. */
+async function reverseSaleEffects(tx: Tx, auth: AuthContext, s: typeof sales.$inferSelect, note: string) {
+  const id = s.id;
+  const [{ returns }] = await tx
+    .select({ returns: sql<number>`count(*)::int` })
+    .from(saleReturns)
+    .where(and(eq(saleReturns.saleId, id), eq(saleReturns.status, "POSTED")));
+  if (returns > 0) throw conflict("Void the returns made against this sale first");
+  {
     const items = await tx.select().from(saleItems).where(eq(saleItems.saleId, id));
     const variants = await loadVariants(
       tx,
@@ -245,17 +259,39 @@ export async function voidSale(auth: AuthContext, id: string, reason: string) {
         referenceType: "SALE",
         referenceId: id,
         userId: auth.userId,
-        note: `Void: ${reason}`,
+        note,
         lot: item.lotId ? { existingLotId: item.lotId } : undefined,
         serials: v.trackSerials && serials.length ? { numbers: serials, mode: "restock" } : undefined,
       });
     }
     await voidPaymentsFor(tx, { saleId: id }, auth.userId);
+  }
+}
+
+export async function voidSale(auth: AuthContext, id: string, reason: string) {
+  await db.transaction(async (tx) => {
+    const s = await lockSale(tx, auth, id);
+    if (s.status === "VOID") throw conflict("This sale is already void");
+    await reverseSaleEffects(tx, auth, s, `Void: ${reason}`);
     await tx
       .update(sales)
       .set({ status: "VOID", voidedAt: new Date(), voidedByUserId: auth.userId, voidReason: reason })
       .where(eq(sales.id, id));
     await refreshSalePayment(tx, id);
+  });
+  return getSale(auth, id);
+}
+
+/** Edits a posted sale: the old stock and payments are reversed and the new lines applied. */
+export async function updateSale(auth: AuthContext, id: string, input: SaleInput) {
+  await db.transaction(async (tx) => {
+    const s = await lockSale(tx, auth, id);
+    if (s.status === "VOID") throw conflict("A deleted sale can't be edited");
+    await reverseSaleEffects(tx, auth, s, "Edited");
+    // serials sold on the old lines were restocked above; unlink before the lines go
+    await tx.update(serialNumbers).set({ saleItemId: null }).where(inArray(serialNumbers.saleItemId, tx.select({ id: saleItems.id }).from(saleItems).where(eq(saleItems.saleId, id))));
+    await tx.delete(saleItems).where(eq(saleItems.saleId, id));
+    await writeSale(tx, auth, input, { id, invoiceNumber: s.invoiceNumber, locationId: s.locationId });
   });
   return getSale(auth, id);
 }

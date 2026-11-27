@@ -15,6 +15,20 @@
       "when": 1795593875751,
       "tag": "0001_payment_void_and_serials",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795779942062,
+      "tag": "0002_payment_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795784636132,
+      "tag": "0003_line_position",
+      "breakpoints": true
     }
   ]
 }

@@ -1,800 +1,771 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { ImageUp, MapPin, Pencil, Percent, Plus, Ruler, Save, Trash2 } from "lucide-react";
-import { Field, FormGrid, Input, Select, Textarea, Toggle, Checkbox } from "@/components/ui/form";
-import { ConfirmDialog, Modal } from "@/components/ui/modal";
-import { Alert, Badge, Button, Card, CardHeader, ErrorState, LoadingBlock, PageHeader, Tabs } from "@/components/ui/primitives";
-import { DataTable } from "@/components/ui/table";
-import { useToast } from "@/components/ui/toast";
-import { api, del, patch, post } from "@/lib/client/api";
-import { useAction, useApi } from "@/lib/client/hooks";
-import { useSession, type OrgSettings } from "@/lib/client/session";
-import type { Location, TaxRate, Unit } from "@/lib/client/types";
+import { useState, useEffect, useRef, ChangeEvent, FormEvent, useCallback } from "react";
+import {
+    Building2,
+    User,
+    Upload,
+    Trash2,
+    Check,
+    Save,
+    ImageIcon,
+    KeyRound,
+    Eye,
+    EyeOff,
+    MapPin,
+    Plus,
+    Pencil,
+    X,
+} from "lucide-react";
+import { api, apiError } from "@/lib/client/http";
+import { useSession } from "@/lib/client/session";
+import { DotsLoader } from "@/components/pharma/dots-loader";
 
-type Tab = "business" | "preferences" | "locations" | "tax" | "units" | "numbering";
+interface OrgDetails {
+    businessName: string;
+    logoUrl: string | null;
+    panVatNumber: string;
+    vatRegistered: boolean;
+    address: string;
+    phone: string;
+    email: string;
+    currencySymbol: string;
+}
+
+interface LocationRow {
+    id: string;
+    name: string;
+    code: string | null;
+    address: string | null;
+    phone: string | null;
+    isDefault: boolean;
+    isActive: boolean;
+}
+
+const emptyLocation = { name: "", code: "", address: "", phone: "", isDefault: false };
 
 export default function SettingsPage() {
-  const params = useSearchParams();
-  const router = useRouter();
-  const [tab, setTabState] = useState<Tab>((params.get("tab") as Tab) || "business");
-  const setTab = (t: Tab) => {
-    setTabState(t);
-    router.replace(`?tab=${t}`, { scroll: false });
-  };
-  return (
-    <div>
-      <PageHeader title="Business settings" subtitle="Your business profile, money and tax preferences, and store setup" />
-      <div className="mb-5">
-        <Tabs
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { value: "business", label: "Business" },
-            { value: "preferences", label: "Preferences" },
-            { value: "locations", label: "Locations" },
-            { value: "tax", label: "Tax rates" },
-            { value: "units", label: "Units" },
-            { value: "numbering", label: "Numbering" },
-          ]}
-        />
-      </div>
-      {tab === "business" && <BusinessTab />}
-      {tab === "preferences" && <PreferencesTab />}
-      {tab === "locations" && <LocationsTab />}
-      {tab === "tax" && <TaxTab />}
-      {tab === "units" && <UnitsTab />}
-      {tab === "numbering" && <NumberingTab />}
-    </div>
-  );
-}
+    const { session, can, readOnly, reloadSettings } = useSession();
+    const authUser = session.user;
+    const canManage = can("settings.manage") && !readOnly;
+    const [activeTab, setActiveTab] = useState<"org" | "user" | "password" | "locations">("org");
 
-function BusinessTab() {
-  const { org, can, reloadSettings, settings, readOnly } = useSession();
-  const toast = useToast();
-  const editable = can("settings.manage") && !readOnly;
-  const [f, setF] = useState({
-    name: org.name,
-    legalName: org.legalName ?? "",
-    taxId: org.taxId ?? "",
-    email: org.email ?? "",
-    phone: org.phone ?? "",
-    address: org.address ?? "",
-  });
-  const { busy, error, run } = useAction();
-  const logo = useAction();
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF({ ...f, [k]: e.target.value });
+    const [locations, setLocations] = useState<LocationRow[]>([]);
+    const [locationForm, setLocationForm] = useState<(typeof emptyLocation & { id?: string }) | null>(null);
+    const [locationError, setLocationError] = useState<string | null>(null);
+    const [savingLocation, setSavingLocation] = useState(false);
 
-  return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <Card className="lg:col-span-2">
-        <CardHeader title="Business profile" subtitle="Shown on invoices, receipts and reports" />
-        <form
-          className="space-y-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            run(async () => {
-              await patch("/api/settings", {
-                organization: {
-                  name: f.name,
-                  legalName: f.legalName || null,
-                  taxId: f.taxId || null,
-                  email: f.email || null,
-                  phone: f.phone || null,
-                  address: f.address || null,
-                },
-              });
-              await reloadSettings();
-              toast("Business profile saved");
-            });
-          }}
-        >
-          {error && <Alert>{error}</Alert>}
-          <fieldset disabled={!editable} className="space-y-4">
-            <FormGrid>
-              <Field label="Business name" required>
-                <Input required value={f.name} onChange={set("name")} />
-              </Field>
-              <Field label="Registered / legal name">
-                <Input value={f.legalName} onChange={set("legalName")} />
-              </Field>
-              <Field label={settings.taxIdLabel}>
-                <Input value={f.taxId} onChange={set("taxId")} />
-              </Field>
-              <Field label="Phone">
-                <Input value={f.phone} onChange={set("phone")} />
-              </Field>
-              <Field label="Email" className="sm:col-span-2">
-                <Input type="email" value={f.email} onChange={set("email")} />
-              </Field>
-            </FormGrid>
-            <Field label="Address">
-              <Textarea value={f.address} onChange={set("address")} />
-            </Field>
-          </fieldset>
-          {editable && (
-            <div className="flex justify-end">
-              <Button type="submit" icon={Save} loading={busy}>
-                Save profile
-              </Button>
-            </div>
-          )}
-        </form>
-      </Card>
-      <Card>
-        <CardHeader title="Logo" />
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex h-28 w-28 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-slate-50">
-            {org.logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={org.logoUrl} alt="Logo" className="h-full w-full object-cover" />
-            ) : (
-              <span className="text-4xl font-bold text-[#044d73]">{org.name.charAt(0).toUpperCase()}</span>
-            )}
-          </div>
-          {logo.error && <Alert>{logo.error}</Alert>}
-          {editable && (
-            <div className="flex gap-2">
-              <label className="inline-flex h-8 cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                <ImageUp className="h-4 w-4" /> {logo.busy ? "Uploading…" : "Upload"}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (!file) return;
-                    const form = new FormData();
-                    form.set("file", file);
-                    logo.run(async () => {
-                      await api("/api/settings/logo", { form });
-                      await reloadSettings();
-                      toast("Logo updated");
-                    });
-                  }}
-                />
-              </label>
-              {org.logoUrl && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  icon={Trash2}
-                  onClick={() =>
-                    logo.run(async () => {
-                      await del("/api/settings/logo");
-                      await reloadSettings();
-                    })
-                  }
-                >
-                  Remove
-                </Button>
-              )}
-            </div>
-          )}
-          <p className="text-center text-[11px] text-slate-400">JPEG, PNG, WebP or GIF up to 5 MB.</p>
-        </div>
-      </Card>
-    </div>
-  );
-}
+    const [orgForm, setOrgForm] = useState<OrgDetails | null>(null);
+    const [logoPreview, setLogoPreview] = useState<string | null>(null); // local preview only, until saved
+    const [pendingLogoDataUri, setPendingLogoDataUri] = useState<string | null>(null);
+    const [pendingLogoFile, setPendingLogoFile] = useState<File | null>(null);
 
-const TIMEZONES = ["Asia/Kathmandu", "Asia/Kolkata", "Asia/Dhaka", "Asia/Dubai", "Asia/Singapore", "Europe/London", "America/New_York", "UTC"];
+    const [userForm, setUserForm] = useState({ name: "", email: "" });
 
-function PreferencesTab() {
-  const { settings, can, reloadSettings, readOnly } = useSession();
-  const toast = useToast();
-  const editable = can("settings.manage") && !readOnly;
-  const [s, setS] = useState<OrgSettings>(settings);
-  const { busy, error, run } = useAction();
-  const up = <K extends keyof OrgSettings>(k: K, v: OrgSettings[K]) => setS((x) => ({ ...x, [k]: v }));
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        run(async () => {
-          await patch("/api/settings", {
-            settings: {
-              currencyCode: s.currencyCode,
-              currencySymbol: s.currencySymbol,
-              currencyDecimals: Number(s.currencyDecimals),
-              locale: s.locale,
-              timezone: s.timezone,
-              calendarSystem: s.calendarSystem,
-              taxLabel: s.taxLabel,
-              taxIdLabel: s.taxIdLabel,
-              taxRegistered: s.taxRegistered,
-              pricesIncludeTax: s.pricesIncludeTax,
-              enableVariants: s.enableVariants,
-              enableBatchTracking: s.enableBatchTracking || s.enableExpiryTracking,
-              enableExpiryTracking: s.enableExpiryTracking,
-              enableSerialTracking: s.enableSerialTracking,
-              enableMultiLocation: s.enableMultiLocation,
-              enableWholesalePricing: s.enableWholesalePricing,
-              allowNegativeStock: !!s.allowNegativeStock,
-              expiryAlertDays: Number(s.expiryAlertDays),
-              invoiceFooter: (s.invoiceFooter as string) || null,
-              receiptFooter: (s.receiptFooter as string) || null,
-            },
-          });
-          await reloadSettings();
-          toast("Preferences saved");
-        });
-      }}
-      className="space-y-6"
-    >
-      {error && <Alert>{error}</Alert>}
-      <fieldset disabled={!editable} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="Money & dates" />
-          <FormGrid>
-            <Field label="Currency code">
-              <Input value={s.currencyCode} maxLength={3} onChange={(e) => up("currencyCode", e.target.value.toUpperCase())} />
-            </Field>
-            <Field label="Currency symbol">
-              <Input value={s.currencySymbol} onChange={(e) => up("currencySymbol", e.target.value)} />
-            </Field>
-            <Field label="Decimal places">
-              <Select value={String(s.currencyDecimals)} onChange={(e) => up("currencyDecimals", Number(e.target.value))}>
-                {[0, 1, 2, 3].map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Number format (locale)" hint="e.g. en-US, en-IN, ne-NP">
-              <Input value={s.locale} onChange={(e) => up("locale", e.target.value)} />
-            </Field>
-            <Field label="Time zone">
-              <Select value={s.timezone} onChange={(e) => up("timezone", e.target.value)}>
-                {[...new Set([s.timezone, ...TIMEZONES])].map((t) => (
-                  <option key={t}>{t}</option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Calendar">
-              <Select value={s.calendarSystem} onChange={(e) => up("calendarSystem", e.target.value as "AD" | "BS")}>
-                <option value="AD">Gregorian (AD)</option>
-                <option value="BS">Bikram Sambat (BS)</option>
-              </Select>
-            </Field>
-          </FormGrid>
-        </Card>
-        <Card>
-          <CardHeader title="Tax" />
-          <FormGrid>
-            <Field label="Tax name" hint="VAT, GST, Sales tax…">
-              <Input value={s.taxLabel} onChange={(e) => up("taxLabel", e.target.value)} />
-            </Field>
-            <Field label="Tax ID label" hint="PAN, VAT No., GSTIN…">
-              <Input value={s.taxIdLabel} onChange={(e) => up("taxIdLabel", e.target.value)} />
-            </Field>
-          </FormGrid>
-          <div className="mt-3 divide-y divide-slate-100">
-            <Toggle
-              checked={s.taxRegistered}
-              onChange={(v) => up("taxRegistered", v)}
-              label="Registered for tax"
-              description="When off, sales carry no tax and tax paid on purchases is added to stock cost."
-            />
-            <Toggle
-              checked={s.pricesIncludeTax}
-              onChange={(v) => up("pricesIncludeTax", v)}
-              label="Selling prices include tax"
-              description="Tax is worked out from the price instead of added on top."
-            />
-          </div>
-        </Card>
-        <Card>
-          <CardHeader title="Inventory features" subtitle="Turn on only what your products need" />
-          <div className="divide-y divide-slate-100">
-            <Toggle checked={s.enableVariants} onChange={(v) => up("enableVariants", v)} label="Product variants" description="Sizes, colours, weights… each with its own SKU, price and stock." />
-            <Toggle
-              checked={s.enableBatchTracking}
-              onChange={(v) => up("enableBatchTracking", v)}
-              disabled={s.enableExpiryTracking}
-              label="Batch / lot tracking"
-              description="Record a batch number on each purchase."
-            />
-            <Toggle
-              checked={s.enableExpiryTracking}
-              onChange={(v) => setS((x) => ({ ...x, enableExpiryTracking: v, enableBatchTracking: v || x.enableBatchTracking }))}
-              label="Expiry dates"
-              description="Track expiry per batch and sell the earliest-expiring stock first."
-            />
-            <Toggle checked={s.enableSerialTracking} onChange={(v) => up("enableSerialTracking", v)} label="Serial numbers" description="Track individual units (IMEI, serial) for electronics." />
-            <Toggle checked={s.enableWholesalePricing} onChange={(v) => up("enableWholesalePricing", v)} label="Wholesale prices" description="A second price level you can choose at checkout." />
-            <Toggle checked={!!s.allowNegativeStock} onChange={(v) => up("allowNegativeStock", v)} label="Allow selling below zero stock" />
-            <Toggle checked={s.enableMultiLocation} onChange={(v) => up("enableMultiLocation", v)} label="Multiple locations" description="Branches and warehouses with transfers." />
-          </div>
-          {s.enableExpiryTracking && (
-            <div className="mt-3">
-              <Field label="Warn about expiry this many days ahead">
-                <Input type="number" min={0} value={s.expiryAlertDays} onChange={(e) => up("expiryAlertDays", Number(e.target.value))} />
-              </Field>
-            </div>
-          )}
-        </Card>
-        <Card>
-          <CardHeader title="Document footers" />
-          <div className="space-y-4">
-            <Field label="Invoice footer" hint="Terms, bank details, thank-you note">
-              <Textarea value={(s.invoiceFooter as string) ?? ""} onChange={(e) => up("invoiceFooter", e.target.value)} />
-            </Field>
-            <Field label="Receipt footer">
-              <Textarea value={(s.receiptFooter as string) ?? ""} onChange={(e) => up("receiptFooter", e.target.value)} />
-            </Field>
-          </div>
-        </Card>
-      </fieldset>
-      {editable && (
-        <div className="flex justify-end">
-          <Button type="submit" icon={Save} loading={busy}>
-            Save preferences
-          </Button>
-        </div>
-      )}
-    </form>
-  );
-}
-
-/** Generic create/edit modal for the small settings lists. */
-function useEditor<T>() {
-  const [editing, setEditing] = useState<{ row: T | null } | null>(null);
-  return { editing, openNew: () => setEditing({ row: null }), openEdit: (row: T) => setEditing({ row }), close: () => setEditing(null) };
-}
-
-function LocationsTab() {
-  const { can, readOnly, session } = useSession();
-  const editable = can("settings.manage") && !readOnly && session.user.isOwner;
-  const { data, error, loading, reload } = useApi<{ items: Location[] }>("/api/locations");
-  const ed = useEditor<Location>();
-  const toast = useToast();
-  return (
-    <Card padded={false}>
-      <div className="p-4 sm:p-5">
-        <CardHeader
-          title="Locations"
-          subtitle="Stores and warehouses. Stock is kept separately for each."
-          icon={MapPin}
-          actions={editable && <Button size="sm" icon={Plus} onClick={ed.openNew}>Add location</Button>}
-        />
-      </div>
-      <DataTable
-        rows={data?.items}
-        loading={loading}
-        error={error}
-        onRetry={reload}
-        rowKey={(r) => r.id}
-        columns={[
-          {
-            key: "name",
-            header: "Name",
-            cell: (r) => (
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-800">{r.name}</span>
-                {r.isDefault && <Badge tone="blue">Default</Badge>}
-                {!r.isActive && <Badge tone="red">Inactive</Badge>}
-              </div>
-            ),
-          },
-          { key: "type", header: "Type", cell: (r) => (r.type === "STORE" ? "Store" : "Warehouse") },
-          { key: "code", header: "Code", cell: (r) => r.code ?? "—", hideBelow: "sm" },
-          { key: "phone", header: "Phone", cell: (r) => r.phone ?? "—", hideBelow: "md" },
-          { key: "staff", header: "Staff", cell: (r) => r.staffCount, align: "right", hideBelow: "sm" },
-          {
-            key: "a",
-            header: "",
-            align: "right",
-            cell: (r) =>
-              editable && (
-                <Button size="sm" variant="ghost" icon={Pencil} onClick={() => ed.openEdit(r)}>
-                  Edit
-                </Button>
-              ),
-          },
-        ]}
-      />
-      {ed.editing && (
-        <LocationModal
-          row={ed.editing.row}
-          onClose={ed.close}
-          onSaved={() => {
-            ed.close();
-            reload();
-            toast("Location saved");
-          }}
-        />
-      )}
-    </Card>
-  );
-}
-
-function LocationModal({ row, onClose, onSaved }: { row: Location | null; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState({
-    name: row?.name ?? "",
-    code: row?.code ?? "",
-    type: row?.type ?? "STORE",
-    phone: row?.phone ?? "",
-    address: row?.address ?? "",
-    isDefault: row?.isDefault ?? false,
-    isActive: row?.isActive ?? true,
-  });
-  const { busy, error, run } = useAction();
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const save = () =>
-    run(async () => {
-      const body = { name: f.name, code: f.code || null, type: f.type, phone: f.phone || null, address: f.address || null, isDefault: f.isDefault || undefined };
-      if (row) await patch(`/api/locations/${row.id}`, { ...body, isActive: f.isActive });
-      else await post("/api/locations", body);
-      onSaved();
+    const [passwordForm, setPasswordForm] = useState({
+        current: "",
+        newPassword: "",
+        confirmPassword: "",
     });
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      title={row ? "Edit location" : "Add location"}
-      footer={
-        <>
-          {row && !row.isDefault && (
-            <Button variant="ghost" icon={Trash2} className="mr-auto text-rose-600" onClick={() => setConfirmDelete(true)}>
-              Delete
-            </Button>
-          )}
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button loading={busy} onClick={save} disabled={!f.name.trim()}>
-            Save
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-4">
-        {error && <Alert>{error}</Alert>}
-        <FormGrid>
-          <Field label="Name" required>
-            <Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus />
-          </Field>
-          <Field label="Type">
-            <Select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as "STORE" | "WAREHOUSE" })}>
-              <option value="STORE">Store</option>
-              <option value="WAREHOUSE">Warehouse</option>
-            </Select>
-          </Field>
-          <Field label="Short code">
-            <Input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
-          </Field>
-          <Field label="Phone">
-            <Input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />
-          </Field>
-        </FormGrid>
-        <Field label="Address">
-          <Textarea value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} rows={2} />
-        </Field>
-        <div className="flex flex-wrap gap-5">
-          {!row?.isDefault && <Checkbox checked={f.isDefault} onChange={(v) => setF({ ...f, isDefault: v })} label="Make default location" />}
-          {row && !row.isDefault && <Checkbox checked={f.isActive} onChange={(v) => setF({ ...f, isActive: v })} label="Active" />}
-        </div>
-      </div>
-      <DeleteConfirm open={confirmDelete} onClose={() => setConfirmDelete(false)} path={row ? `/api/locations/${row.id}` : ""} what={row?.name ?? ""} onDone={onSaved} />
-    </Modal>
-  );
-}
+    const [showCurrent, setShowCurrent] = useState(false);
+    const [showNew, setShowNew] = useState(false);
+    const [showConfirm, setShowConfirm] = useState(false);
+    const [passwordError, setPasswordError] = useState<string | null>(null);
 
-function DeleteConfirm({ open, onClose, path, what, onDone }: { open: boolean; onClose: () => void; path: string; what: string; onDone: () => void }) {
-  const { busy, error, run } = useAction();
-  return (
-    <ConfirmDialog
-      open={open}
-      onClose={onClose}
-      title={`Delete ${what}?`}
-      message="If it has been used it will be deactivated instead, so your history stays intact."
-      confirmLabel="Delete"
-      busy={busy}
-      error={error}
-      onConfirm={() =>
-        run(async () => {
-          await del(path);
-          onClose();
-          onDone();
-        })
-      }
-    />
-  );
-}
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState<string | null>(null);
+    const [savingOrg, setSavingOrg] = useState(false);
+    const [savingUser, setSavingUser] = useState(false);
+    const [savingPassword, setSavingPassword] = useState(false);
 
-function TaxTab() {
-  const { can, readOnly, settings } = useSession();
-  const editable = can("settings.manage") && !readOnly;
-  const { data, error, loading, reload } = useApi<{ items: TaxRate[] }>("/api/tax-rates");
-  const ed = useEditor<TaxRate>();
-  const [f, setF] = useState({ name: "", rate: "", isDefault: false, isActive: true });
-  const { busy, error: saveErr, run } = useAction();
-  const [deleting, setDeleting] = useState<TaxRate | null>(null);
-  const open = (r: TaxRate | null) => {
-    setF({ name: r?.name ?? "", rate: r?.rate ?? "", isDefault: r?.isDefault ?? false, isActive: r?.isActive ?? true });
-    if (r) ed.openEdit(r);
-    else ed.openNew();
-  };
-  return (
-    <Card padded={false}>
-      <div className="p-4 sm:p-5">
-        <CardHeader
-          title={`${settings.taxLabel} rates`}
-          subtitle={settings.taxRegistered ? "Applied to products and documents" : "You’re not tax-registered — rates only affect purchase costs."}
-          icon={Percent}
-          actions={editable && <Button size="sm" icon={Plus} onClick={() => open(null)}>Add rate</Button>}
-        />
-      </div>
-      <DataTable
-        rows={data?.items}
-        loading={loading}
-        error={error}
-        onRetry={reload}
-        rowKey={(r) => r.id}
-        columns={[
-          {
-            key: "n",
-            header: "Name",
-            cell: (r) => (
-              <span className="flex items-center gap-2 font-semibold text-slate-800">
-                {r.name} {r.isDefault && <Badge tone="blue">Default</Badge>} {!r.isActive && <Badge tone="red">Inactive</Badge>}
-              </span>
-            ),
-          },
-          { key: "r", header: "Rate", cell: (r) => `${Number(r.rate)}%`, align: "right" },
-          { key: "p", header: "Products", cell: (r) => r.productCount, align: "right" },
-          {
-            key: "a",
-            header: "",
-            align: "right",
-            cell: (r) =>
-              editable && (
-                <div className="flex justify-end gap-1">
-                  <Button size="sm" variant="ghost" icon={Pencil} onClick={() => open(r)}>Edit</Button>
-                  <Button size="sm" variant="ghost" icon={Trash2} aria-label="Delete" onClick={() => setDeleting(r)} />
+    const [toastMessage, setToastMessage] = useState<string | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    function triggerToast(msg: string) {
+        setToastMessage(msg);
+        setTimeout(() => setToastMessage(null), 3000);
+    }
+
+
+    useEffect(() => {
+        async function loadSettings() {
+            setLoading(true);
+            setLoadError(null);
+            try {
+                const orgRes = await api.get("/api/settings");
+                setOrgForm(toOrgForm(orgRes.data));
+            } catch {
+                setLoadError("Failed to load organization details.");
+            } finally {
+                setLoading(false);
+            }
+        }
+        loadSettings();
+    }, []);
+
+    const loadLocations = useCallback(async () => {
+        try {
+            const res = await api.get("/api/locations", { params: { includeInactive: true } });
+            setLocations(res.data.items);
+        } catch {
+            setLocationError("Failed to load locations.");
+        }
+    }, []);
+
+    useEffect(() => {
+        if (activeTab === "locations") loadLocations();
+    }, [activeTab, loadLocations]);
+
+    async function handleSaveLocation(e: FormEvent) {
+        e.preventDefault();
+        if (!locationForm) return;
+        setLocationError(null);
+        setSavingLocation(true);
+        const payload = {
+            name: locationForm.name.trim(),
+            code: locationForm.code.trim() || null,
+            address: locationForm.address.trim() || null,
+            phone: locationForm.phone.trim() || null,
+            ...(locationForm.isDefault && { isDefault: true }),
+        };
+        try {
+            if (locationForm.id) await api.patch(`/api/locations/${locationForm.id}`, payload);
+            else await api.post("/api/locations", payload);
+            setLocationForm(null);
+            await loadLocations();
+            triggerToast("Location saved. Switch locations from the sidebar.");
+        } catch (err) {
+            setLocationError(apiError(err, "Failed to save location."));
+        } finally {
+            setSavingLocation(false);
+        }
+    }
+
+    async function toggleLocationActive(loc: LocationRow) {
+        setLocationError(null);
+        try {
+            await api.patch(`/api/locations/${loc.id}`, { isActive: !loc.isActive });
+            await loadLocations();
+        } catch (err) {
+            setLocationError(apiError(err, "Failed to update location."));
+        }
+    }
+
+    useEffect(() => {
+        if (authUser) {
+            setUserForm({ name: authUser.name, email: authUser.email });
+        }
+    }, [authUser]);
+
+    async function handleSaveOrg(e: FormEvent) {
+        e.preventDefault();
+        if (!orgForm) return;
+
+        setSavingOrg(true);
+        try {
+            const payload = {
+                organization: {
+                    name: orgForm.businessName,
+                    taxId: orgForm.panVatNumber || null,
+                    address: orgForm.address || null,
+                    phone: orgForm.phone || null,
+                    email: orgForm.email || null,
+                },
+                settings: { taxRegistered: orgForm.vatRegistered, currencySymbol: orgForm.currencySymbol || "Rs." },
+            };
+            // Logo is only sent when a new file was actually chosen this session —
+            // avoids re-uploading on every unrelated field save.
+            if (pendingLogoFile) {
+                const fd = new FormData();
+                fd.append("file", pendingLogoFile);
+                await api.upload("/api/settings/logo", fd);
+            }
+
+            const res = await api.patch("/api/settings", payload);
+            setOrgForm(toOrgForm(res.data));
+            setPendingLogoDataUri(null);
+            setPendingLogoFile(null);
+            setLogoPreview(null);
+            await reloadSettings();
+            triggerToast("Organization details updated successfully!");
+        } catch (err) {
+            triggerToast(apiError(err, "Failed to save organization details."));
+        } finally {
+            setSavingOrg(false);
+        }
+    }
+
+    function handleLogoUpload(e: ChangeEvent<HTMLInputElement>) {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!file.type.startsWith("image/")) {
+            triggerToast("Please choose a valid image file.");
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = () => {
+            const dataUrl = reader.result as string;
+            setLogoPreview(dataUrl);
+            setPendingLogoDataUri(dataUrl);
+            setPendingLogoFile(file);
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function handleRemoveLogoPreview() {
+
+        setLogoPreview(null);
+        setPendingLogoDataUri(null);
+        setPendingLogoFile(null);
+    }
+
+    async function handleSaveUser(e: FormEvent) {
+        e.preventDefault();
+        setSavingUser(true);
+        try {
+            await api.patch("/api/users/me", {
+                name: userForm.name,
+            });
+            triggerToast("User details updated successfully!");
+        } catch (err) {
+            triggerToast(apiError(err, "Failed to save user details."));
+        } finally {
+            setSavingUser(false);
+        }
+    }
+
+    async function handleSavePassword(e: FormEvent) {
+        e.preventDefault();
+        setPasswordError(null);
+
+        if (!passwordForm.current) {
+            setPasswordError("Please enter your current password.");
+            return;
+        }
+        if (passwordForm.newPassword.length < 8) {
+            setPasswordError("New password must be at least 8 characters long.");
+            return;
+        }
+        if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+            setPasswordError("New passwords do not match.");
+            return;
+        }
+
+        setSavingPassword(true);
+        try {
+            await api.post("/api/auth/change-password", {
+                currentPassword: passwordForm.current,
+                newPassword: passwordForm.newPassword,
+            });
+            setPasswordForm({ current: "", newPassword: "", confirmPassword: "" });
+            // This device stays signed in; every other device is signed out.
+            triggerToast("Password changed. Other devices were signed out.");
+        } catch (err) {
+            setPasswordError(apiError(err, "Failed to change password."));
+        } finally {
+            setSavingPassword(false);
+        }
+    }
+
+    if (loading) {
+        return (
+            <div className="py-24 flex items-center justify-center">
+                <DotsLoader text="Loading settings..." />
+            </div>
+        );
+    }
+
+    if (loadError || !orgForm) {
+        return (
+            <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-600">
+                {loadError ?? "Failed to load settings."}
+            </div>
+        );
+    }
+
+    const displayedLogo = logoPreview ?? orgForm.logoUrl;
+
+    return (
+        <div className="flex flex-col gap-8 pb-12">
+            {toastMessage && (
+                <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-xl bg-slate-900 px-4 py-3 text-white shadow-2xl">
+                    <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 text-white">
+                        <Check className="h-3.5 w-3.5 stroke-[3]" />
+                    </div>
+                    <span className="text-sm font-medium">{toastMessage}</span>
                 </div>
-              ),
-          },
-        ]}
-      />
-      <Modal
-        open={!!ed.editing}
-        onClose={ed.close}
-        title={ed.editing?.row ? "Edit tax rate" : "Add tax rate"}
-        size="sm"
-        footer={
-          <>
-            <Button variant="secondary" onClick={ed.close}>Cancel</Button>
-            <Button
-              loading={busy}
-              disabled={!f.name.trim() || f.rate === ""}
-              onClick={() =>
-                run(async () => {
-                  const body = { name: f.name, rate: Number(f.rate), isDefault: f.isDefault || undefined };
-                  if (ed.editing?.row) await patch(`/api/tax-rates/${ed.editing.row.id}`, { ...body, isActive: f.isActive });
-                  else await post("/api/tax-rates", body);
-                  ed.close();
-                  reload();
-                })
-              }
-            >
-              Save
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          {saveErr && <Alert>{saveErr}</Alert>}
-          <Field label="Name" hint="e.g. VAT 13%, Zero rated">
-            <Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus />
-          </Field>
-          <Field label="Rate (%)">
-            <Input type="number" min={0} max={100} step="any" value={f.rate} onChange={(e) => setF({ ...f, rate: e.target.value })} />
-          </Field>
-          <div className="flex gap-5">
-            <Checkbox checked={f.isDefault} onChange={(v) => setF({ ...f, isDefault: v })} label="Default for new products" />
-            {ed.editing?.row && <Checkbox checked={f.isActive} onChange={(v) => setF({ ...f, isActive: v })} label="Active" />}
-          </div>
-        </div>
-      </Modal>
-      <DeleteConfirm open={!!deleting} onClose={() => setDeleting(null)} path={`/api/tax-rates/${deleting?.id}`} what={deleting?.name ?? ""} onDone={reload} />
-    </Card>
-  );
-}
+            )}
 
-function UnitsTab() {
-  const { can, readOnly } = useSession();
-  const editable = can("products.manage") && !readOnly;
-  const { data, error, loading, reload } = useApi<{ items: Unit[] }>("/api/units");
-  const ed = useEditor<Unit>();
-  const [f, setF] = useState({ name: "", code: "", allowDecimal: false, isActive: true });
-  const { busy, error: saveErr, run } = useAction();
-  const [deleting, setDeleting] = useState<Unit | null>(null);
-  const open = (r: Unit | null) => {
-    setF({ name: r?.name ?? "", code: r?.code ?? "", allowDecimal: r?.allowDecimal ?? false, isActive: r?.isActive ?? true });
-    if (r) ed.openEdit(r);
-    else ed.openNew();
-  };
-  return (
-    <Card padded={false}>
-      <div className="p-4 sm:p-5">
-        <CardHeader
-          title="Units of measure"
-          subtitle="Decimal units (kg, litre, metre) allow fractional quantities"
-          icon={Ruler}
-          actions={editable && <Button size="sm" icon={Plus} onClick={() => open(null)}>Add unit</Button>}
-        />
-      </div>
-      <DataTable
-        rows={data?.items}
-        loading={loading}
-        error={error}
-        onRetry={reload}
-        rowKey={(r) => r.id}
-        columns={[
-          { key: "n", header: "Name", cell: (r) => <span className="font-semibold text-slate-800">{r.name} {!r.isActive && <Badge tone="red">Inactive</Badge>}</span> },
-          { key: "c", header: "Code", cell: (r) => <code className="text-xs">{r.code}</code> },
-          { key: "d", header: "Quantities", cell: (r) => (r.allowDecimal ? <Badge tone="blue">Decimal</Badge> : <Badge>Whole</Badge>) },
-          { key: "p", header: "Products", cell: (r) => r.productCount, align: "right" },
-          {
-            key: "a",
-            header: "",
-            align: "right",
-            cell: (r) =>
-              editable && (
-                <div className="flex justify-end gap-1">
-                  <Button size="sm" variant="ghost" icon={Pencil} onClick={() => open(r)}>Edit</Button>
-                  <Button size="sm" variant="ghost" icon={Trash2} aria-label="Delete" onClick={() => setDeleting(r)} />
+            <div className="rounded-xl bg-[#044d73] p-4 sm:px-6 sm:py-5 text-white shadow-sm flex items-center justify-between">
+                <div>
+                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight">Settings</h1>
                 </div>
-              ),
-          },
-        ]}
-      />
-      <Modal
-        open={!!ed.editing}
-        onClose={ed.close}
-        title={ed.editing?.row ? "Edit unit" : "Add unit"}
-        size="sm"
-        footer={
-          <>
-            <Button variant="secondary" onClick={ed.close}>Cancel</Button>
-            <Button
-              loading={busy}
-              disabled={!f.name.trim() || !f.code.trim()}
-              onClick={() =>
-                run(async () => {
-                  const body = { name: f.name, code: f.code, allowDecimal: f.allowDecimal };
-                  if (ed.editing?.row) await patch(`/api/units/${ed.editing.row.id}`, { ...body, isActive: f.isActive });
-                  else await post("/api/units", body);
-                  ed.close();
-                  reload();
-                })
-              }
-            >
-              Save
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          {saveErr && <Alert>{saveErr}</Alert>}
-          <FormGrid>
-            <Field label="Name"><Input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></Field>
-            <Field label="Code" hint="Short label, e.g. kg"><Input value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} /></Field>
-          </FormGrid>
-          <div className="flex gap-5">
-            <Checkbox checked={f.allowDecimal} onChange={(v) => setF({ ...f, allowDecimal: v })} label="Allow decimal quantities" />
-            {ed.editing?.row && <Checkbox checked={f.isActive} onChange={(v) => setF({ ...f, isActive: v })} label="Active" />}
-          </div>
+            </div>
+
+            <div className="flex items-center gap-1 sm:gap-2 border-b border-slate-200 overflow-x-auto no-scrollbar pb-px">
+                <button
+                    onClick={() => setActiveTab("org")}
+                    className={`flex shrink-0 whitespace-nowrap items-center gap-2 border-b-2 px-3.5 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold transition-all ${activeTab === "org" ? "border-[#044d73] text-[#044d73]" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+                >
+                    <Building2 className="h-4 w-4" />
+                    Organization Details
+                </button>
+                <button
+                    onClick={() => setActiveTab("user")}
+                    className={`flex shrink-0 whitespace-nowrap items-center gap-2 border-b-2 px-3.5 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold transition-all ${activeTab === "user" ? "border-[#044d73] text-[#044d73]" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+                >
+                    <User className="h-4 w-4" />
+                    User Details
+                </button>
+                <button
+                    onClick={() => setActiveTab("password")}
+                    className={`flex shrink-0 whitespace-nowrap items-center gap-2 border-b-2 px-3.5 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold transition-all ${activeTab === "password" ? "border-[#044d73] text-[#044d73]" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+                >
+                    <KeyRound className="h-4 w-4" />
+                    Change Password
+                </button>
+                <button
+                    onClick={() => setActiveTab("locations")}
+                    className={`flex shrink-0 whitespace-nowrap items-center gap-2 border-b-2 px-3.5 sm:px-5 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold transition-all ${activeTab === "locations" ? "border-[#044d73] text-[#044d73]" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+                >
+                    <MapPin className="h-4 w-4" />
+                    Locations
+                </button>
+            </div>
+
+            {/* Organization Details Tab */}
+            {activeTab === "org" && (
+                <form onSubmit={handleSaveOrg} className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm space-y-5 sm:space-y-6">
+                  <fieldset disabled={!canManage} className="contents">
+                    <div className="border-b border-slate-100 pb-5 sm:pb-6">
+                        <h3 className="text-sm font-bold text-slate-900 mb-1">Organization Logo</h3>
+
+                        <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4 sm:gap-5 mt-3 text-center sm:text-left">
+                            <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-slate-200 bg-slate-50 shadow-sm">
+                                {displayedLogo ? (
+                                    <img src={displayedLogo} alt="Logo" className="h-full w-full object-cover" />
+                                ) : (
+                                    <div className="flex flex-col items-center justify-center text-slate-400">
+                                        <ImageIcon className="h-6 w-6 mb-0.5 stroke-1" />
+                                        <span className="text-xs font-bold text-[#044d73]">
+                                            {orgForm.businessName.charAt(0).toUpperCase()}
+                                        </span>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3">
+                                <input type="file" ref={fileInputRef} onChange={handleLogoUpload} accept="image/*" className="hidden" />
+                                <button
+                                    type="button"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="flex items-center gap-2 rounded-lg bg-[#044d73] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#033f60] transition-colors"
+                                >
+                                    <Upload className="h-4 w-4" />
+                                    Upload Logo
+                                </button>
+
+                                {pendingLogoDataUri && (
+                                    <button
+                                        type="button"
+                                        onClick={handleRemoveLogoPreview}
+                                        className="flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50/50 px-3.5 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 transition-colors"
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                        Cancel New Logo
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        {pendingLogoDataUri && (
+                            <p className="text-[11px] text-amber-600 mt-2">New logo selected — click &quot;Save&quot; below to upload it.</p>
+                        )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 text-xs">
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">Business Name</label>
+                            <input
+                                type="text" required value={orgForm.businessName}
+                                onChange={(e) => setOrgForm({ ...orgForm, businessName: e.target.value })}
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">PAN / VAT Number</label>
+                            <input
+                                type="text" value={orgForm.panVatNumber ?? ""}
+                                onChange={(e) => setOrgForm({ ...orgForm, panVatNumber: e.target.value })}
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">Phone</label>
+                            <input
+                                type="text" value={orgForm.phone ?? ""}
+                                onChange={(e) => setOrgForm({ ...orgForm, phone: e.target.value })}
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">Email</label>
+                            <input
+                                type="email" value={orgForm.email ?? ""}
+                                onChange={(e) => setOrgForm({ ...orgForm, email: e.target.value })}
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">Currency Symbol</label>
+                            <input
+                                type="text" required maxLength={8} value={orgForm.currencySymbol}
+                                onChange={(e) => setOrgForm({ ...orgForm, currencySymbol: e.target.value })}
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                            />
+                        </div>
+
+                        <div className="flex items-end">
+                            <label className="flex items-center gap-2 font-semibold text-slate-700 py-2 cursor-pointer">
+                                <input
+                                    type="checkbox" checked={orgForm.vatRegistered}
+                                    onChange={(e) => setOrgForm({ ...orgForm, vatRegistered: e.target.checked })}
+                                    className="h-4 w-4 rounded border-slate-300 accent-[#044d73]"
+                                />
+                                VAT registered (tick VAT on new sales by default)
+                            </label>
+                        </div>
+
+                        <div className="sm:col-span-2">
+                            <label className="block font-semibold text-slate-700 mb-1.5">Address</label>
+                            <input
+                                type="text" value={orgForm.address ?? ""}
+                                onChange={(e) => setOrgForm({ ...orgForm, address: e.target.value })}
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex items-center justify-end pt-4 border-t border-slate-100">
+                        <button
+                            type="submit"
+                            disabled={savingOrg || !canManage}
+                            className="flex items-center justify-center gap-2 rounded-lg bg-[#044d73] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#033f60] transition-colors disabled:opacity-50 w-full sm:w-auto"
+                        >
+                            <Save className="h-4 w-4" />
+                            {savingOrg ? "Saving..." : "Save Organization Details"}
+                        </button>
+                    </div>
+                  </fieldset>
+                </form>
+            )}
+
+            {/* User Details Tab */}
+            {activeTab === "user" && (
+                <form onSubmit={handleSaveUser} className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm space-y-5 sm:space-y-6">
+                    <div className="border-b border-slate-100 pb-3">
+                        <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                            <User className="h-4 w-4 text-[#044d73]" />
+                            User Details
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">Update your account name. Your sign-in email stays the same.</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 text-xs">
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">Name</label>
+                            <input
+                                type="text" required value={userForm.name}
+                                onChange={(e) => setUserForm({ ...userForm, name: e.target.value })}
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">Email</label>
+                            <input
+                                type="email" required value={userForm.email} readOnly disabled
+                                title="Your sign-in email can't be changed here"
+                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73] bg-slate-50 text-slate-500"
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex items-center justify-end pt-4 border-t border-slate-100">
+                        <button
+                            type="submit"
+                            disabled={savingUser}
+                            className="flex items-center justify-center gap-2 rounded-lg bg-[#044d73] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#033f60] transition-colors disabled:opacity-50 w-full sm:w-auto"
+                        >
+                            <Save className="h-4 w-4" />
+                            {savingUser ? "Saving..." : "Save User Details"}
+                        </button>
+                    </div>
+                </form>
+            )}
+
+            {/* Change Password Tab */}
+            {activeTab === "password" && (
+                <form onSubmit={handleSavePassword} className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm space-y-5 sm:space-y-6">
+                    <div className="border-b border-slate-100 pb-3">
+                        <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                            <KeyRound className="h-4 w-4 text-[#044d73]" />
+                            Change Password
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                            Update your login password to secure your account. You&apos;ll stay signed in here; other devices are signed out.
+                        </p>
+                    </div>
+
+                    {passwordError && (
+                        <div className="rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs text-red-600 font-medium">
+                            {passwordError}
+                        </div>
+                    )}
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 text-xs">
+                        <div className="sm:col-span-2">
+                            <label className="block font-semibold text-slate-700 mb-1.5">Current Password</label>
+                            <div className="relative">
+                                <input
+                                    type={showCurrent ? "text" : "password"} required
+                                    value={passwordForm.current}
+                                    onChange={(e) => setPasswordForm({ ...passwordForm, current: e.target.value })}
+                                    placeholder="Enter current password"
+                                    className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                                />
+                                <button type="button" onClick={() => setShowCurrent(!showCurrent)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                                    {showCurrent ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">New Password</label>
+                            <div className="relative">
+                                <input
+                                    type={showNew ? "text" : "password"} required
+                                    value={passwordForm.newPassword}
+                                    onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                                    placeholder="At least 8 characters"
+                                    className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                                />
+                                <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                                    {showNew ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block font-semibold text-slate-700 mb-1.5">Confirm New Password</label>
+                            <div className="relative">
+                                <input
+                                    type={showConfirm ? "text" : "password"} required
+                                    value={passwordForm.confirmPassword}
+                                    onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                                    placeholder="Re-enter new password"
+                                    className="w-full rounded-lg border border-slate-200 px-3 py-2 pr-10 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                                />
+                                <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                                    {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center justify-end pt-4 border-t border-slate-100">
+                        <button
+                            type="submit"
+                            disabled={savingPassword}
+                            className="flex items-center justify-center gap-2 rounded-lg bg-[#044d73] px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[#033f60] transition-colors disabled:opacity-50 w-full sm:w-auto"
+                        >
+                            <Save className="h-4 w-4" />
+                            {savingPassword ? "Updating..." : "Update Password"}
+                        </button>
+                    </div>
+                </form>
+            )}
+
+            {/* Locations Tab */}
+            {activeTab === "locations" && (
+                <div className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6 shadow-sm space-y-5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+                        <div>
+                            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                                <MapPin className="h-4 w-4 text-[#044d73]" />
+                                Locations
+                            </h3>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                                Each shop or store room keeps its own stock. Switch between them from the sidebar.
+                            </p>
+                        </div>
+                        {canManage && session.user.isOwner && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setLocationError(null);
+                                    setLocationForm({ ...emptyLocation });
+                                }}
+                                className="flex items-center justify-center gap-2 rounded-lg bg-[#044d73] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#033f60] transition-colors"
+                            >
+                                <Plus className="h-4 w-4" />
+                                Add Location
+                            </button>
+                        )}
+                    </div>
+
+                    {locationError && (
+                        <div className="rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs text-red-600 font-medium">
+                            {locationError}
+                        </div>
+                    )}
+
+                    <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+                        {locations.length === 0 && (
+                            <div className="py-10">
+                                <DotsLoader text="Loading locations..." />
+                            </div>
+                        )}
+                        {locations.map((loc) => (
+                            <div key={loc.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3">
+                                <div className="min-w-0">
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="text-sm font-bold text-slate-800">{loc.name}</span>
+                                        {loc.code && <span className="text-[11px] text-slate-400">{loc.code}</span>}
+                                        {loc.isDefault && (
+                                            <span className="rounded-full bg-[#044d73]/10 px-2 py-0.5 text-[10px] font-bold uppercase text-[#044d73]">Default</span>
+                                        )}
+                                        {!loc.isActive && (
+                                            <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold uppercase text-red-600">Inactive</span>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-slate-500 mt-0.5 truncate">
+                                        {[loc.address, loc.phone].filter(Boolean).join(" · ") || "—"}
+                                    </p>
+                                </div>
+                                {canManage && session.user.isOwner && (
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setLocationError(null);
+                                                setLocationForm({
+                                                    id: loc.id,
+                                                    name: loc.name,
+                                                    code: loc.code ?? "",
+                                                    address: loc.address ?? "",
+                                                    phone: loc.phone ?? "",
+                                                    isDefault: loc.isDefault,
+                                                });
+                                            }}
+                                            className="flex items-center gap-1.5 rounded-md border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                                        >
+                                            <Pencil className="h-3.5 w-3.5" />
+                                            Edit
+                                        </button>
+                                        {!loc.isDefault && (
+                                            <button
+                                                type="button"
+                                                onClick={() => toggleLocationActive(loc)}
+                                                className={`rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${loc.isActive ? "border-red-100 text-red-600 bg-red-50/30 hover:bg-red-50" : "border-emerald-100 text-emerald-700 bg-emerald-50/40 hover:bg-emerald-50"}`}
+                                            >
+                                                {loc.isActive ? "Deactivate" : "Activate"}
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {locationForm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+                    <form onSubmit={handleSaveLocation} className="w-full max-w-md rounded-xl bg-white shadow-2xl">
+                        <div className="flex items-center justify-between rounded-t-xl bg-[#044d73] px-5 py-3.5 text-white">
+                            <h3 className="text-sm font-bold">{locationForm.id ? "Edit Location" : "Add Location"}</h3>
+                            <button type="button" onClick={() => setLocationForm(null)} className="rounded-md p-1 hover:bg-white/10">
+                                <X className="h-4 w-4" />
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-5 text-xs">
+                            <div className="sm:col-span-2">
+                                <label className="block font-semibold text-slate-700 mb-1.5">Name</label>
+                                <input
+                                    type="text" required value={locationForm.name}
+                                    onChange={(e) => setLocationForm({ ...locationForm, name: e.target.value })}
+                                    placeholder="e.g. New Road Branch"
+                                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                                />
+                            </div>
+                            <div>
+                                <label className="block font-semibold text-slate-700 mb-1.5">Code</label>
+                                <input
+                                    type="text" maxLength={30} value={locationForm.code}
+                                    onChange={(e) => setLocationForm({ ...locationForm, code: e.target.value })}
+                                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                                />
+                            </div>
+                            <div>
+                                <label className="block font-semibold text-slate-700 mb-1.5">Phone</label>
+                                <input
+                                    type="text" value={locationForm.phone}
+                                    onChange={(e) => setLocationForm({ ...locationForm, phone: e.target.value })}
+                                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                                />
+                            </div>
+                            <div className="sm:col-span-2">
+                                <label className="block font-semibold text-slate-700 mb-1.5">Address</label>
+                                <input
+                                    type="text" value={locationForm.address}
+                                    onChange={(e) => setLocationForm({ ...locationForm, address: e.target.value })}
+                                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                                />
+                            </div>
+                            <label className="sm:col-span-2 flex items-center gap-2 font-semibold text-slate-700 cursor-pointer">
+                                <input
+                                    type="checkbox" checked={locationForm.isDefault}
+                                    onChange={(e) => setLocationForm({ ...locationForm, isDefault: e.target.checked })}
+                                    className="h-4 w-4 rounded border-slate-300 accent-[#044d73]"
+                                />
+                                Default location
+                            </label>
+                            {locationError && (
+                                <div className="sm:col-span-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-red-600 font-medium">{locationError}</div>
+                            )}
+                        </div>
+                        <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3.5">
+                            <button type="button" onClick={() => setLocationForm(null)} className="rounded-lg border border-slate-200 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">
+                                Cancel
+                            </button>
+                            <button type="submit" disabled={savingLocation} className="flex items-center gap-2 rounded-lg bg-[#044d73] px-4 py-2 text-xs font-semibold text-white hover:bg-[#033f60] disabled:opacity-50">
+                                <Save className="h-4 w-4" />
+                                {savingLocation ? "Saving..." : "Save Location"}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
         </div>
-      </Modal>
-      <DeleteConfirm open={!!deleting} onClose={() => setDeleting(null)} path={`/api/units/${deleting?.id}`} what={deleting?.name ?? ""} onDone={reload} />
-    </Card>
-  );
+    );
 }
 
-const DOC_LABELS: Record<string, string> = {
-  SALE: "Sales invoice",
-  SALE_RETURN: "Sale return",
-  PURCHASE: "Purchase",
-  PURCHASE_ORDER: "Purchase order",
-  PURCHASE_RETURN: "Purchase return",
-  STOCK_ADJUSTMENT: "Stock adjustment",
-  STOCK_TRANSFER: "Stock transfer",
-  PAYMENT: "Payment",
-};
-
-interface Sequence {
-  documentType: string;
-  prefix: string;
-  nextNumber: number;
-  padding: number;
-  preview: string;
+function toOrgForm(data: { organization: { name: string; logoUrl: string | null; taxId: string | null; address: string | null; phone: string | null; email: string | null }; settings: { taxRegistered: boolean; currencySymbol: string } }): OrgDetails {
+    const o = data.organization;
+    return {
+        businessName: o.name,
+        logoUrl: o.logoUrl,
+        panVatNumber: o.taxId ?? "",
+        vatRegistered: data.settings.taxRegistered,
+        address: o.address ?? "",
+        phone: o.phone ?? "",
+        email: o.email ?? "",
+        currencySymbol: data.settings.currencySymbol,
+    };
 }
-
-function NumberingTab() {
-  const { can, readOnly } = useSession();
-  const editable = can("settings.manage") && !readOnly;
-  const { data, error, loading, reload } = useApi<{ items: Sequence[] }>("/api/settings/sequences");
-  const [edit, setEdit] = useState<Sequence | null>(null);
-  const { busy, error: saveErr, run, setError } = useAction();
-  if (error) return <Card><ErrorState message={error} onRetry={reload} /></Card>;
-  if (loading && !data) return <LoadingBlock />;
-  return (
-    <Card padded={false}>
-      <div className="p-4 sm:p-5">
-        <CardHeader title="Document numbering" subtitle="Numbers are gap-free and never reused" />
-      </div>
-      <DataTable
-        rows={data?.items}
-        rowKey={(r) => r.documentType}
-        columns={[
-          { key: "t", header: "Document", cell: (r) => <span className="font-semibold text-slate-800">{DOC_LABELS[r.documentType] ?? r.documentType}</span> },
-          { key: "p", header: "Prefix", cell: (r) => <code className="text-xs">{r.prefix || "—"}</code> },
-          { key: "n", header: "Next number", cell: (r) => r.nextNumber, align: "right" },
-          { key: "v", header: "Next will be", cell: (r) => <Badge tone="blue">{r.preview}</Badge> },
-          {
-            key: "a",
-            header: "",
-            align: "right",
-            cell: (r) =>
-              editable && (
-                <Button size="sm" variant="ghost" icon={Pencil} onClick={() => { setError(null); setEdit(r); }}>
-                  Edit
-                </Button>
-              ),
-          },
-        ]}
-      />
-      <Modal
-        open={!!edit}
-        onClose={() => setEdit(null)}
-        title={`Numbering — ${edit ? DOC_LABELS[edit.documentType] : ""}`}
-        size="sm"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setEdit(null)}>Cancel</Button>
-            <Button
-              loading={busy}
-              onClick={() =>
-                run(async () => {
-                  if (!edit) return;
-                  await patch("/api/settings/sequences", { documentType: edit.documentType, prefix: edit.prefix, nextNumber: Number(edit.nextNumber), padding: Number(edit.padding) });
-                  setEdit(null);
-                  reload();
-                })
-              }
-            >
-              Save
-            </Button>
-          </>
-        }
-      >
-        {edit && (
-          <div className="space-y-4">
-            {saveErr && <Alert>{saveErr}</Alert>}
-            <Field label="Prefix" hint="Letters, digits and - / _ .">
-              <Input value={edit.prefix} onChange={(e) => setEdit({ ...edit, prefix: e.target.value })} />
-            </Field>
-            <FormGrid>
-              <Field label="Next number" hint="Can only move forward for the same prefix">
-                <Input type="number" min={1} value={edit.nextNumber} onChange={(e) => setEdit({ ...edit, nextNumber: Number(e.target.value) })} />
-              </Field>
-              <Field label="Digits">
-                <Input type="number" min={1} max={12} value={edit.padding} onChange={(e) => setEdit({ ...edit, padding: Number(e.target.value) })} />
-              </Field>
-            </FormGrid>
-            <p className="text-xs text-slate-500">
-              Preview: <Badge tone="blue">{`${edit.prefix}${String(edit.nextNumber).padStart(Number(edit.padding) || 1, "0")}`}</Badge>
-            </p>
-          </div>
-        )}
-      </Modal>
-    </Card>
-  );
-}
-

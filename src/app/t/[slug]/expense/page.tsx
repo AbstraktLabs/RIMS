@@ -1,0 +1,1458 @@
+"use client";
+
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react";
+import {
+  Plus,
+  Search,
+  Wallet,
+  Calendar,
+  Tag,
+  Tags,
+  FileText,
+  X,
+  Pencil,
+  Trash2,
+  Receipt,
+  TrendingDown,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle,
+  Check,
+  Boxes,
+  ListFilter,
+} from "lucide-react";
+import { api, apiError } from "@/lib/client/http";
+import { useFmt, useSession } from "@/lib/client/session";
+import { AnimatedStatValue } from "@/components/pharma/animated-stat-value";
+
+interface ExpenseCategory {
+  id: string;
+  name: string;
+}
+
+// Matches GET /expenses response shape
+interface ApiExpense {
+  id: string;
+  categoryId: string | null;
+  description: string | null;
+  note: string | null;
+  amount: string;
+  expenseDate: string;
+  category?: { id: string; name: string } | null;
+}
+
+// Extends ApiExpense with a source discriminator. Every row that actually
+// comes from GET /expenses is "manual" — there is no inventory-sourced row
+// yet. This field exists so a later integration (surfacing purchases here)
+// can add "inventory" as a second source without restructuring this page.
+type ExpenseSource = "manual" | "inventory";
+
+interface DisplayExpense extends ApiExpense {
+  source: ExpenseSource;
+}
+
+interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
+function CreatableSelect({
+  value,
+  options,
+  onChange,
+  onCreate,
+  onDelete,
+  noun,
+  noneLabel,
+}: {
+  value: string;
+  options: { id: string; name: string }[];
+  onChange: (v: string) => void;
+  onCreate: (raw: string) => string | null | Promise<string | null>;
+  onDelete?: (optionId: string) => void | Promise<void>;
+  noun: string;
+  noneLabel?: string;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [manageSearch, setManageSearch] = useState("");
+  const manageRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        manageRef.current &&
+        !manageRef.current.contains(event.target as Node)
+      ) {
+        setManaging(false);
+      }
+    }
+    if (managing) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [managing]);
+
+  function cancel() {
+    setDraft("");
+    setAdding(false);
+  }
+  async function commit() {
+    const createdId = await onCreate(draft);
+    if (createdId) onChange(createdId);
+    cancel();
+  }
+
+  if (adding) {
+    return (
+      <div className="flex gap-2">
+        <input
+          autoFocus
+          value={draft}
+          placeholder={`New ${noun}`}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+            }
+            if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            }
+          }}
+          className="w-full rounded-lg border border-slate-200/80 bg-slate-50/30 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400/80 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all"
+        />
+        <button
+          type="button"
+          onClick={commit}
+          title={`Add ${noun}`}
+          className="shrink-0 rounded-lg bg-[#044d73] px-3.5 text-white hover:bg-[#033f60] transition-colors flex items-center justify-center"
+        >
+          <Check className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={cancel}
+          title="Cancel"
+          className="shrink-0 rounded-lg border border-slate-200 px-3.5 text-slate-500 hover:bg-slate-50 transition-colors flex items-center justify-center"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+
+  const filteredManageOptions = options.filter((o) =>
+    o.name.toLowerCase().includes(manageSearch.toLowerCase()),
+  );
+
+  return (
+    <div className="relative flex gap-2">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-slate-200/80 bg-slate-50/30 px-3 py-2.5 text-sm text-slate-800 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all"
+      >
+        {noneLabel !== undefined && <option value="">{noneLabel}</option>}
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </select>
+
+      <button
+        type="button"
+        onClick={() => {
+          setAdding(true);
+          setManaging(false);
+        }}
+        title={`Add new ${noun}`}
+        className="shrink-0 rounded-lg border border-slate-200 px-3 text-[#044d73] hover:bg-[#044d73]/10 transition-colors flex items-center justify-center"
+      >
+        <Plus className="h-4 w-4" />
+      </button>
+
+      {onDelete && options.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setManaging((p) => !p)}
+          title={`Manage / Delete ${noun}s`}
+          className={`shrink-0 rounded-lg border px-2.5 transition-colors flex items-center justify-center ${
+            managing
+              ? "border-[#044d73] bg-[#044d73] text-white"
+              : "border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 hover:bg-slate-50"
+          }`}
+        >
+          <ListFilter className="h-4 w-4" />
+        </button>
+      )}
+
+      {managing && onDelete && (
+        <div
+          ref={manageRef}
+          className="absolute right-0 top-full z-50 mt-1 w-64 rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl"
+        >
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-[#044d73]">
+              Manage {noun}s ({options.length})
+            </span>
+            <button
+              type="button"
+              onClick={() => setManaging(false)}
+              className="p-0.5 text-slate-400 hover:text-slate-600 rounded"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {options.length > 5 && (
+            <div className="mb-2">
+              <input
+                type="text"
+                value={manageSearch}
+                onChange={(e) => setManageSearch(e.target.value)}
+                placeholder={`Filter ${noun}s...`}
+                className="h-7 w-full rounded border border-slate-200 bg-slate-50 px-2 text-xs text-slate-700 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-[#044d73]"
+              />
+            </div>
+          )}
+
+          <div className="max-h-48 overflow-y-auto space-y-1">
+            {filteredManageOptions.length === 0 ? (
+              <p className="p-2 text-center text-xs text-slate-400">
+                No {noun}s found
+              </p>
+            ) : (
+              filteredManageOptions.map((opt) => (
+                <div
+                  key={opt.id}
+                  className="flex items-center justify-between rounded-lg px-2.5 py-1.5 text-xs hover:bg-slate-50 transition-colors"
+                >
+                  <span
+                    className={`truncate font-medium ${
+                      value === opt.id
+                        ? "text-[#044d73] font-semibold"
+                        : "text-slate-700"
+                    }`}
+                  >
+                    {opt.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(opt.id)}
+                    title={`Delete "${opt.name}"`}
+                    className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+// Whole-dataset totals — computed once from a full fetch on load, then kept
+// in sync incrementally as expenses are added/edited/deleted, never by
+// re-fetching and recomputing from scratch on every write.
+interface ExpenseStats {
+  totalCount: number;
+  totalAmount: number;
+  manualCount: number;
+  manualAmount: number;
+  inventoryCount: number;
+  inventoryAmount: number;
+}
+
+const ADD_NEW_VALUE = "__add_new__";
+const PAGE_LIMIT = 8;
+const SEARCH_DEBOUNCE_MS = 400;
+const STATS_FETCH_LIMIT = 100;
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function emptyForm() {
+  return {
+    description: "",
+    categoryId: "",
+    amount: "",
+    date: new Date().toISOString().slice(0, 10),
+    note: "",
+  };
+}
+
+function computeStats(all: ApiExpense[]): ExpenseStats {
+  const isInventory = (e: ApiExpense) => e.category?.name === "Inventory";
+  const manual = all.filter((e) => !isInventory(e));
+  const inventory = all.filter(isInventory);
+
+  return {
+    totalCount: all.length,
+    totalAmount: all.reduce((s, e) => s + Number(e.amount), 0),
+    manualCount: manual.length,
+    manualAmount: manual.reduce((s, e) => s + Number(e.amount), 0),
+    inventoryCount: inventory.length,
+    inventoryAmount: inventory.reduce((s, e) => s + Number(e.amount), 0),
+  };
+}
+
+function isInventoryExpense(e: { category?: { name: string } | null }) {
+  return e.category?.name === "Inventory";
+}
+
+export default function ExpensesPage() {
+  const { can, session } = useSession();
+  const canManage = can("finance.manage");
+  const { money, f } = useFmt();
+  // non-breaking space keeps "Rs." and the amount on one line in the stat cards
+  const formatCurrency = (n: number) => money(n).replace(" ", " ");
+  const locationId = session.activeLocationId;
+  const [expenses, setExpenses] = useState<DisplayExpense[]>([]);
+  const [pagination, setPagination] = useState<Pagination>({
+    page: 1,
+    limit: PAGE_LIMIT,
+    total: 0,
+    totalPages: 1,
+  });
+  const [categories, setCategories] = useState<ExpenseCategory[]>([]);
+
+  const [stats, setStats] = useState<ExpenseStats>({
+    totalCount: 0,
+    totalAmount: 0,
+    manualCount: 0,
+    manualAmount: 0,
+    inventoryCount: 0,
+    inventoryAmount: 0,
+  });
+
+  const [loadingCategories, setLoadingCategories] = useState(true);
+  const [loadingExpenses, setLoadingExpenses] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<DisplayExpense | null>(
+    null,
+  );
+  const [saving, setSaving] = useState(false);
+  const [expandedExpenseIds, setExpandedExpenseIds] = useState<string[]>([]);
+
+  function toggleExpand(id: string) {
+    setExpandedExpenseIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  }
+
+  const [search, setSearch] = useState("");
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [categoryFilter, setCategoryFilter] = useState<string>("All");
+
+  const [dateFromInput, setDateFromInput] = useState("");
+  const [dateToInput, setDateToInput] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const hasDateFilter = Boolean(dateFromInput || dateToInput);
+
+  const [deleteTarget, setDeleteTarget] = useState<DisplayExpense | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+
+
+  const [isManageCategoriesOpen, setIsManageCategoriesOpen] = useState(false);
+  const [manageNewCategoryInput, setManageNewCategoryInput] = useState("");
+  const [manageError, setManageError] = useState<string | null>(null);
+  const [confirmDeleteCategoryId, setConfirmDeleteCategoryId] = useState<
+    string | null
+  >(null);
+
+  const [form, setForm] = useState(emptyForm());
+
+  /* ---- debounce date range inputs before they hit the network ---- */
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDateFrom(dateFromInput);
+      setDateTo(dateToInput);
+      setCurrentPage(1);
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [dateFromInput, dateToInput]);
+
+  /* ---- categories: fetched once, independent of expenses/pagination ---- */
+
+  const loadCategories = useCallback(async () => {
+    setLoadingCategories(true);
+    try {
+      const res = await api.get("/api/expenses/category");
+      setCategories(res.data.expenseCategories);
+    } catch {
+      setLoadError("Failed to load expense categories.");
+    } finally {
+      setLoadingCategories(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
+
+  /* ---- stats: one full fetch on initial load only — after that, updated
+     incrementally in state as expenses are added/edited/deleted ---- */
+
+  const loadStats = useCallback(async () => {
+    try {
+      const res = await api.get("/api/expenses", {
+        params: { page: 1, limit: STATS_FETCH_LIMIT },
+      });
+      const all: ApiExpense[] = res.data.expenses;
+      setStats(computeStats(all));
+    } catch {
+      // Non-critical — leave previously computed stats displayed.
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locationId]);
+
+  useEffect(() => {
+    loadStats();
+  }, [loadStats]);
+
+  /* ---- expenses: server-driven pagination + category/date filters.
+     Only used for the initial load and for page/filter navigation —
+     never called again just because a single expense was added/edited/deleted. ---- */
+
+  const loadExpenses = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!opts?.silent) setLoadingExpenses(true);
+      try {
+        const params: Record<string, string | number> = {
+          page: currentPage,
+          limit: PAGE_LIMIT,
+        };
+        if (categoryFilter !== "All") params.categoryId = categoryFilter;
+        if (dateFrom && dateTo) {
+          params.startDate = dateFrom;
+          params.endDate = dateTo;
+        }
+
+        const res = await api.get("/api/expenses", { params });
+        const tagged: DisplayExpense[] = res.data.expenses.map(
+          (e: ApiExpense) => ({
+            ...e,
+            source: "manual" as const,
+          }),
+        );
+        setExpenses(tagged);
+        setPagination(res.data.pagination);
+      } catch {
+        setLoadError("Failed to load expenses.");
+      } finally {
+        if (!opts?.silent) setLoadingExpenses(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentPage, categoryFilter, dateFrom, dateTo, locationId],
+  );
+
+  useEffect(() => {
+    loadExpenses();
+  }, [loadExpenses]);
+
+  /* ---- client-side text filter, applied only to the already-loaded page ---- */
+
+  const visibleExpenses = search
+    ? expenses.filter((e) => {
+        const q = search.toLowerCase();
+        return (
+          (e.description ?? "").toLowerCase().includes(q) ||
+          (e.category?.name ?? "").toLowerCase().includes(q) ||
+          (e.note ?? "").toLowerCase().includes(q)
+        );
+      })
+    : expenses;
+
+  /* ---- categories: create/delete ---- */
+
+  async function addCategory(raw: string): Promise<string | null> {
+    const name = raw.trim();
+    if (!name) return null;
+    const existing = categories.find(
+      (c) => c.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (existing) return existing.id;
+    try {
+      const res = await api.post("/api/expenses/category", { name });
+      const created: ExpenseCategory = res.data.expenseCategory;
+      setCategories((prev) =>
+        [...prev, created].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      return created.id;
+    } catch {
+      return null;
+    }
+  }
+
+  async function deleteCategory(id: string) {
+    try {
+      await api.delete(`/api/expenses/category/${id}`);
+    } catch {
+      return;
+    }
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    if (form.categoryId === id) setForm((p) => ({ ...p, categoryId: "" }));
+    if (categoryFilter === id) {
+      setCategoryFilter("All");
+      setCurrentPage(1);
+    }
+    await loadExpenses();
+  }
+
+  async function handleAddCategoryFromManage() {
+    const trimmed = manageNewCategoryInput.trim();
+    if (!trimmed) return;
+    setManageError(null);
+    const createdId = await addCategory(trimmed);
+    if (!createdId) {
+      setManageError("Failed to add category.");
+      return;
+    }
+    setManageNewCategoryInput("");
+  }
+
+  async function handleDeleteCategory(id: string) {
+    setManageError(null);
+    try {
+      await api.delete(`/api/expenses/category/${id}`);
+    } catch {
+      setManageError(
+        "Can't delete — this category may be in use, or something went wrong.",
+      );
+      setConfirmDeleteCategoryId(null);
+      return;
+    }
+    setCategories((prev) => prev.filter((c) => c.id !== id));
+    if (form.categoryId === id) setForm((p) => ({ ...p, categoryId: "" }));
+    if (categoryFilter === id) {
+      setCategoryFilter("All");
+      setCurrentPage(1);
+    }
+    setConfirmDeleteCategoryId(null);
+    await loadExpenses();
+  }
+
+  function openManageCategories() {
+    setManageError(null);
+    setManageNewCategoryInput("");
+    setConfirmDeleteCategoryId(null);
+    setIsManageCategoriesOpen(true);
+  }
+
+  function clearDateFilter() {
+    setDateFromInput("");
+    setDateToInput("");
+    setDateFrom("");
+    setDateTo("");
+    setCurrentPage(1);
+  }
+
+  /* ---- expense form ---- */
+
+  function resetForm() {
+    setForm(emptyForm());
+    setEditingExpense(null);
+    setErrorMsg(null);
+  }
+
+  function handleOpenEdit(expense: DisplayExpense) {
+    setEditingExpense(expense);
+    setForm({
+      description: expense.description ?? "",
+      categoryId: expense.categoryId ?? "",
+      amount: expense.amount,
+      date: expense.expenseDate,
+      note: expense.note ?? "",
+    });
+    setIsModalOpen(true);
+  }
+
+  // Applies a created/updated/deleted expense to `stats` directly — no
+  // network call, no refetch of the 100-row batch.
+  function applyStatsDelta(
+    prev: ApiExpense | null, // the expense's state before the change, or null if new
+    next: ApiExpense | null, // the expense's state after the change, or null if deleted
+  ) {
+    setStats((s) => {
+      let { totalCount, totalAmount, manualCount, manualAmount, inventoryCount, inventoryAmount } = s;
+
+      if (prev) {
+        totalCount -= 1;
+        totalAmount -= Number(prev.amount);
+        if (isInventoryExpense(prev)) {
+          inventoryCount -= 1;
+          inventoryAmount -= Number(prev.amount);
+        } else {
+          manualCount -= 1;
+          manualAmount -= Number(prev.amount);
+        }
+      }
+
+      if (next) {
+        totalCount += 1;
+        totalAmount += Number(next.amount);
+        if (isInventoryExpense(next)) {
+          inventoryCount += 1;
+          inventoryAmount += Number(next.amount);
+        } else {
+          manualCount += 1;
+          manualAmount += Number(next.amount);
+        }
+      }
+
+      return { totalCount, totalAmount, manualCount, manualAmount, inventoryCount, inventoryAmount };
+    });
+  }
+
+  async function handleSaveExpense() {
+    setErrorMsg(null);
+
+    if (!form.description.trim() || !form.amount || !form.date) {
+      setErrorMsg("Please fill in description, amount, and date.");
+      return;
+    }
+    const amountNum = Number(form.amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      setErrorMsg("Enter a valid amount greater than 0.");
+      return;
+    }
+
+    const payload = {
+      categoryId: form.categoryId || undefined,
+      description: form.description.trim(),
+      note: form.note.trim() || undefined,
+      amount: amountNum,
+      expenseDate: form.date,
+    };
+
+    setSaving(true);
+    try {
+      if (editingExpense) {
+        const res = await api.patch(`/api/expenses/${editingExpense.id}`, payload);
+        const updated: ApiExpense = res.data.expense;
+
+        applyStatsDelta(editingExpense, updated);
+
+        // Only splice into the visible list if it's still present there —
+        // if it no longer matches the active category/date filter, drop it
+        // from view rather than showing a row that shouldn't be on this page.
+        setExpenses((prev) => {
+          const stillMatchesFilter =
+            (categoryFilter === "All" || updated.categoryId === categoryFilter) &&
+            (!dateFrom || !dateTo || (updated.expenseDate >= dateFrom && updated.expenseDate <= dateTo));
+
+          if (!stillMatchesFilter) {
+            return prev.filter((e) => e.id !== updated.id);
+          }
+          return prev.map((e) =>
+            e.id === updated.id ? { ...updated, source: "manual" as const } : e,
+          );
+        });
+      } else {
+        const res = await api.post("/api/expenses", payload);
+        const created: ApiExpense = res.data.expense;
+
+        applyStatsDelta(null, created);
+
+        // Only prepend to the visible list when we're on page 1 with no
+        // active filters that would exclude it — otherwise the new row
+        // genuinely isn't part of the currently-viewed page.
+        const belongsOnCurrentView =
+          currentPage === 1 &&
+          (categoryFilter === "All" || created.categoryId === categoryFilter) &&
+          (!dateFrom || !dateTo || (created.expenseDate >= dateFrom && created.expenseDate <= dateTo));
+
+        if (belongsOnCurrentView) {
+          setExpenses((prev) => [{ ...created, source: "manual" as const }, ...prev].slice(0, PAGE_LIMIT));
+          setPagination((p) => ({ ...p, total: p.total + 1, totalPages: Math.ceil((p.total + 1) / PAGE_LIMIT) }));
+        } else {
+          setPagination((p) => ({ ...p, total: p.total + 1, totalPages: Math.ceil((p.total + 1) / PAGE_LIMIT) }));
+        }
+      }
+      resetForm();
+      setIsModalOpen(false);
+    } catch (err) {
+      setErrorMsg(apiError(err, "Failed to save expense. Please try again."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function confirmDeleteExpense() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/api/expenses/${deleteTarget.id}`);
+
+      applyStatsDelta(deleteTarget, null);
+      setExpenses((prev) => prev.filter((e) => e.id !== deleteTarget.id));
+      setPagination((p) => {
+        const newTotal = Math.max(0, p.total - 1);
+        return { ...p, total: newTotal, totalPages: Math.max(1, Math.ceil(newTotal / PAGE_LIMIT)) };
+      });
+
+      // If deleting emptied the current page (and it's not page 1), silently
+      // step back one page — this is the one case that still needs a fetch,
+      // since we don't have the previous page's rows in memory.
+      if (expenses.length === 1 && currentPage > 1) {
+        setCurrentPage((p) => p - 1);
+      }
+
+      setDeleteTarget(null);
+    } catch {
+      setLoadError("Failed to delete expense.");
+      setDeleteTarget(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  const totalPages = pagination.totalPages;
+
+  return (
+    <div className="flex flex-col gap-8">
+      {/* Header */}
+      <div className="rounded-xl bg-[#044d73] p-4 sm:px-6 sm:py-5 text-white shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-semibold tracking-tight">Expenses</h1>
+        </div>
+        {canManage && (<button
+          onClick={() => {
+            resetForm();
+            setIsModalOpen(true);
+          }}
+          disabled={loadingCategories}
+          className="flex items-center justify-center gap-2 bg-white text-[#044d73] hover:bg-slate-50 px-4 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition-colors disabled:opacity-50"
+        >
+          <Plus className="h-4 w-4" strokeWidth={2.5} />
+          Add Expense
+        </button>)}
+      </div>
+
+      {loadError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </div>
+      )}
+
+      {/* Stats — fixed whole-dataset totals, updated incrementally, never
+          via a full refetch after a create/edit/delete */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-slate-400 bg-white p-4 shadow-sm flex items-center justify-between sm:p-5">
+          <div>
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+              Total Expenses
+            </p>
+            <p className="text-2xl font-bold text-slate-800 mt-1 sm:text-3xl">
+              <AnimatedStatValue value={stats.totalCount} />
+            </p>
+          </div>
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-50 text-slate-600 sm:h-12 sm:w-12">
+            <Receipt className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-red-500 bg-white p-4 shadow-sm flex items-center justify-between sm:p-5">
+          <div>
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+              Total Spend
+            </p>
+            <p className="text-2xl font-bold text-slate-800 mt-1 sm:text-3xl">
+              <AnimatedStatValue
+                value={stats.totalAmount}
+                format={formatCurrency}
+              />
+            </p>
+          </div>
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-600 sm:h-12 sm:w-12">
+            <TrendingDown className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-[#044d73] bg-white p-4 shadow-sm flex items-center justify-between sm:p-5">
+          <div>
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+              Manual Spend
+            </p>
+            <p className="text-2xl font-bold text-slate-800 mt-1 sm:text-3xl">
+              <AnimatedStatValue
+                value={stats.manualAmount}
+                format={formatCurrency}
+              />
+            </p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              {stats.manualCount} entr{stats.manualCount !== 1 ? "ies" : "y"}
+            </p>
+          </div>
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#044d73]/10 text-[#044d73] sm:h-12 sm:w-12">
+            <Wallet className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200 border-l-4 border-l-amber-500 bg-white p-4 shadow-sm flex items-center justify-between sm:p-5">
+          <div>
+            <p className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+              Inventory Spend
+            </p>
+            <p className="text-2xl font-bold text-slate-800 mt-1 sm:text-3xl">
+              <AnimatedStatValue
+                value={stats.inventoryAmount}
+                format={formatCurrency}
+              />
+            </p>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              {stats.inventoryCount} entr
+              {stats.inventoryCount !== 1 ? "ies" : "y"}
+            </p>
+          </div>
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-amber-50 text-amber-600 sm:h-12 sm:w-12">
+            <Boxes className="h-5 w-5 sm:h-6 sm:w-6" />
+          </div>
+        </div>
+      </div>
+
+      {/* Control Actions Panel */}
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center w-full md:w-auto">
+          <div className="relative w-full sm:w-72">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search this page..."
+              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+            <select
+              value={categoryFilter}
+              onChange={(e) => {
+                setCategoryFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full sm:w-auto rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+            >
+              <option value="All">All Categories</option>
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name}
+                </option>
+              ))}
+            </select>
+            {canManage && (<button
+              type="button"
+              onClick={openManageCategories}
+              title="Manage Categories"
+              className="shrink-0 rounded-lg border border-slate-200 p-2 text-slate-500 hover:border-[#044d73] hover:text-[#044d73] hover:bg-[#044d73]/5 transition-colors"
+            >
+              <Tags className="h-4 w-4" />
+            </button>)}
+          </div>
+
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <div className="relative flex-1 sm:flex-none sm:w-36">
+              <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                type="date"
+                value={dateFromInput}
+                max={dateToInput || undefined}
+                onChange={(e) => setDateFromInput(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-2 text-sm text-slate-700 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                aria-label="From date"
+              />
+            </div>
+            <span className="text-xs text-slate-400 shrink-0">to</span>
+            <div className="relative flex-1 sm:flex-none sm:w-36">
+              <Calendar className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                type="date"
+                value={dateToInput}
+                min={dateFromInput || undefined}
+                onChange={(e) => setDateToInput(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-2 text-sm text-slate-700 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                aria-label="To date"
+              />
+            </div>
+            {hasDateFilter && (
+              <button
+                onClick={clearDateFilter}
+                title="Clear date filter"
+                className="shrink-0 rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {errorMsg && !isModalOpen && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {errorMsg}
+        </div>
+      )}
+
+      {/* Data Section Container */}
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="hidden md:block overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/50 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <th className="py-3 px-4">Description</th>
+                <th className="py-3 px-4">Category</th>
+                <th className="py-3 px-4">Date</th>
+                <th className="py-3 px-4 text-right">Amount</th>
+                <th className="py-3 px-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {loadingExpenses ? (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="py-12 text-center text-sm text-slate-400"
+                  >
+                    Loading expenses...
+                  </td>
+                </tr>
+              ) : visibleExpenses.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={5}
+                    className="py-12 text-center text-sm text-slate-400"
+                  >
+                    No expenses recorded.
+                  </td>
+                </tr>
+              ) : (
+                visibleExpenses.map((expense) => {
+                  const isExpanded = expandedExpenseIds.includes(expense.id);
+                  return (
+                    <Fragment key={expense.id}>
+                      <tr
+                        onClick={() => toggleExpand(expense.id)}
+                        className={`hover:bg-slate-50/70 transition-colors group cursor-pointer ${isExpanded ? "bg-slate-50/50" : ""
+                          }`}
+                      >
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#044d73]/10 text-[#044d73] border border-[#044d73]/15">
+                              <Wallet className="h-4 w-4" />
+                            </div>
+                            <span className="font-medium text-slate-900">
+                              {expense.description || "—"}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
+                            <Tag className="h-3 w-3" />
+                            {expense.category?.name ?? "Uncategorized"}
+                          </span>
+                        </td>
+                        <td className="py-4 px-4 text-slate-500">
+                          {formatDate(expense.expenseDate)}
+                        </td>
+                        <td className="py-4 px-4 text-right font-semibold text-slate-800">
+                          {formatCurrency(Number(expense.amount))}
+                        </td>
+                        <td className="py-4 px-4 text-right">
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="flex items-center justify-end gap-1.5 opacity-80 group-hover:opacity-100 transition-opacity"
+                          >
+                            {canManage && (<button
+                              onClick={() => handleOpenEdit(expense)}
+                              className="rounded-md p-1.5 text-slate-400 hover:bg-[#044d73]/10 hover:text-[#044d73] transition-colors"
+                              title="Edit Expense"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>)}
+                            {canManage && (<button
+                              onClick={() => setDeleteTarget(expense)}
+                              className="rounded-md p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                              title="Remove Expense"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>)}
+                          </div>
+                        </td>
+                      </tr>
+
+                      {isExpanded && (
+                        <tr className="bg-slate-50/60 border-b border-slate-100 animate-in fade-in duration-150">
+                          <td colSpan={5} className="py-3 px-6 pl-14">
+                            <div className="flex items-start gap-3 rounded-xl border border-slate-200/80 bg-white p-3.5 shadow-xs">
+                              <FileText className="h-4 w-4 text-[#044d73] shrink-0 mt-0.5" />
+                              <div className="space-y-1 min-w-0">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                  Expense Note
+                                </span>
+                                <p className="text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                  {expense.note || (
+                                    <span className="italic text-slate-400">
+                                      No notes added for this expense.
+                                    </span>
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Mobile View */}
+        <div className="block md:hidden divide-y divide-slate-100">
+          {loadingExpenses ? (
+            <div className="py-12 text-center text-sm text-slate-400 px-4">
+              Loading expenses...
+            </div>
+          ) : visibleExpenses.length === 0 ? (
+            <div className="py-12 text-center text-sm text-slate-400 px-4">
+              No expenses recorded.
+            </div>
+          ) : (
+            visibleExpenses.map((expense) => {
+              const isExpanded = expandedExpenseIds.includes(expense.id);
+              return (
+                <div
+                  key={expense.id}
+                  onClick={() => toggleExpand(expense.id)}
+                  className="p-4 flex flex-col gap-3 bg-white cursor-pointer hover:bg-slate-50/40 transition-colors"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#044d73]/10 text-[#044d73] border border-[#044d73]/15">
+                        <Wallet className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <h4 className="font-medium text-slate-900 text-sm">
+                          {expense.description || "—"}
+                        </h4>
+                        <span className="inline-block text-xs text-slate-500 font-medium mt-0.5">
+                          {expense.category?.name ?? "Uncategorized"}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="font-semibold text-slate-800 text-sm">
+                      {formatCurrency(Number(expense.amount))}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <Calendar className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                    <span>{formatDate(expense.expenseDate)}</span>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="flex items-start gap-2 rounded-lg bg-slate-50 p-3 text-xs text-slate-600 border border-slate-100 animate-in fade-in duration-150">
+                      <FileText className="h-3.5 w-3.5 text-[#044d73] shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          Note
+                        </span>
+                        <p className="whitespace-pre-wrap">
+                          {expense.note || "No notes added"}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center justify-end gap-2 border-t border-slate-100/80 pt-3"
+                  >
+                    {canManage && (<button
+                      onClick={() => handleOpenEdit(expense)}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-slate-200 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
+                    </button>)}
+                    {canManage && (<button
+                      onClick={() => setDeleteTarget(expense)}
+                      className="flex flex-1 items-center justify-center gap-1.5 rounded-md border border-red-100 py-2 text-xs font-medium text-red-600 bg-red-50/30 hover:bg-red-50 transition-colors"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </button>)}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Footer Pagination Controls */}
+        {pagination.total > 0 && (
+          <div className="flex flex-col gap-4 items-center justify-between border-t border-slate-100 bg-white px-6 py-4 sm:flex-row">
+            <span className="text-xs text-slate-400">
+              Page {currentPage} of {totalPages} · {pagination.total} total
+              expense{pagination.total !== 1 ? "s" : ""}
+            </span>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                disabled={currentPage === 1}
+                className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+                title="Previous Page"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <button
+                onClick={() =>
+                  setCurrentPage((p) => Math.min(p + 1, totalPages))
+                }
+                disabled={currentPage === totalPages}
+                className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-20 disabled:pointer-events-none transition-colors touch-manipulation"
+                title="Next Page"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Editor Modal Overlay */}
+      {isModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 sm:p-4 backdrop-blur-sm overflow-y-auto"
+          onClick={() => setIsModalOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-2xl rounded-xl bg-white shadow-xl border border-slate-100 overflow-hidden my-auto"
+          >
+            <div className="relative flex items-center justify-center bg-[#044d73] p-4 text-white sm:p-6">
+              <div className="hidden h-10 w-10 items-center justify-center text-white sm:flex">
+                <Wallet className="h-6 w-6" />
+              </div>
+              <h2 className="text-lg font-semibold text-white text-center sm:text-2xl">
+                {editingExpense ? "Edit Expense" : "Add New Expense"}
+              </h2>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="absolute right-4 top-1/2 -translate-y-1/2 rounded-md p-1 text-white/70 hover:bg-white/10 hover:text-white transition-colors sm:right-6"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="mx-4 mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 sm:mx-6 sm:mt-6">
+                {errorMsg}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 sm:gap-5 sm:p-6">
+              <div className="sm:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold text-slate-500 sm:text-sm sm:mb-2">
+                  Description
+                </label>
+                <input
+                  value={form.description}
+                  onChange={(e) =>
+                    setForm({ ...form, description: e.target.value })
+                  }
+                  placeholder="e.g. Electricity bill, equipment repair..."
+                  className="w-full rounded-lg border border-slate-200/80 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400/80 bg-slate-50/30 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-slate-500 sm:text-sm sm:mb-2">
+                  Category
+                </label>
+                <CreatableSelect
+                  value={form.categoryId}
+                  options={categories}
+                  noun="category"
+                  noneLabel="Select / None"
+                  onChange={(id) => setForm((p) => ({ ...p, categoryId: id }))}
+                  onCreate={addCategory}
+                  onDelete={deleteCategory}
+                />
+            
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-slate-500 sm:text-sm sm:mb-2">
+                  Amount ({f.currencySymbol})
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.amount}
+                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                  placeholder="0.00"
+                  className="w-full rounded-lg border border-slate-200/80 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400/80 bg-slate-50/30 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold text-slate-500 sm:text-sm sm:mb-2">
+                  Date
+                </label>
+                <div className="relative">
+                  <Calendar className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="date"
+                    value={form.date}
+                    onChange={(e) => setForm({ ...form, date: e.target.value })}
+                    className="w-full rounded-lg border border-slate-200/80 py-2.5 pl-9 pr-3 text-sm text-slate-800 bg-slate-50/30 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="mb-1.5 block text-xs font-semibold text-slate-500 sm:text-sm sm:mb-2">
+                  Note
+                </label>
+                <div className="relative">
+                  <FileText className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                  <textarea
+                    value={form.note}
+                    onChange={(e) => setForm({ ...form, note: e.target.value })}
+                    placeholder="Optional details — vendor, invoice number, reason, etc."
+                    rows={3}
+                    className="w-full resize-none rounded-lg border border-slate-200/80 py-2.5 pl-9 pr-3 text-sm text-slate-800 placeholder:text-slate-400/80 bg-slate-50/30 focus:bg-white focus:border-[#044d73] focus:outline-none focus:ring-4 focus:ring-[#044d73]/10 transition-all"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 p-4 bg-slate-50/50 rounded-b-xl sm:flex-row sm:justify-end sm:gap-3 sm:p-6">
+              <button
+                type="button"
+                onClick={() => setIsModalOpen(false)}
+                className="rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors w-full sm:w-auto"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveExpense}
+                disabled={saving}
+                className="flex items-center justify-center gap-2 rounded-lg bg-[#044d73] px-5 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[#033f60] disabled:opacity-50 w-full sm:w-auto"
+              >
+                {saving
+                  ? "Saving..."
+                  : editingExpense
+                    ? "Save Changes"
+                    : "Add Expense"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Manage Categories Modal */}
+      {isManageCategoriesOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 sm:p-4 backdrop-blur-sm"
+          onClick={() => setIsManageCategoriesOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-xl bg-white shadow-xl border border-slate-100 overflow-hidden"
+          >
+            <div className="relative flex flex-col items-center text-center gap-1 bg-[#044d73] p-5 sm:p-6 text-white">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 mb-1">
+                <Tags className="h-6 w-6" />
+              </div>
+              <h2 className="text-xl font-semibold">Manage Categories</h2>
+              <p className="text-xs text-white/70">
+                Add new categories or remove ones you no longer use.
+              </p>
+              <button
+                onClick={() => setIsManageCategoriesOpen(false)}
+                className="absolute right-4 top-4 sm:right-5 sm:top-5 rounded-md p-1.5 text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {manageError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-700">
+                  {manageError}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={manageNewCategoryInput}
+                  onChange={(e) => setManageNewCategoryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddCategoryFromManage();
+                    }
+                  }}
+                  placeholder="New category name"
+                  className="flex-1 rounded-lg border border-slate-200 px-3.5 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-[#044d73] focus:outline-none focus:ring-1 focus:ring-[#044d73]"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddCategoryFromManage}
+                  disabled={!manageNewCategoryInput.trim()}
+                  className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[#044d73] px-3.5 py-2.5 text-sm font-semibold text-white hover:bg-[#033f60] disabled:opacity-40 transition-colors"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add
+                </button>
+              </div>
+
+              <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
+                {loadingCategories ? (
+                  <p className="p-4 text-center text-xs text-slate-400">
+                    Loading categories...
+                  </p>
+                ) : categories.length === 0 ? (
+                  <p className="p-4 text-center text-xs text-slate-400">
+                    No categories yet — add one above.
+                  </p>
+                ) : (
+                  categories.map((cat) => (
+                    <div
+                      key={cat.id}
+                      className="flex items-center justify-between gap-3 px-3.5 py-2.5"
+                    >
+                      <span className="flex items-center gap-2 text-sm font-medium text-slate-700 min-w-0">
+                        <Tag className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                        <span className="truncate">{cat.name}</span>
+                      </span>
+                      {confirmDeleteCategoryId === cat.id ? (
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <span className="text-[11px] text-slate-400 mr-0.5">
+                            Delete?
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCategory(cat.id)}
+                            className="rounded-md bg-red-500 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-red-600"
+                          >
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteCategoryId(null)}
+                            className="rounded-md border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-500 hover:bg-slate-50"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteCategoryId(cat.id)}
+                          title="Delete category"
+                          className="shrink-0 rounded-md p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end border-t border-slate-100 bg-slate-50/50 p-4">
+              <button
+                type="button"
+                onClick={() => setIsManageCategoriesOpen(false)}
+                className="rounded-lg bg-white border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-3 sm:p-4 backdrop-blur-sm"
+          onClick={() => setDeleteTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-xl bg-white shadow-xl border border-slate-100 overflow-hidden mx-auto"
+          >
+            <div className="flex flex-col items-center gap-3 p-5 text-center sm:gap-4 sm:p-8">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-red-600 sm:h-14 sm:w-14">
+                <AlertTriangle className="h-6 w-6 sm:h-7 sm:w-7" />
+              </div>
+              <div>
+                <h2 className="text-base font-semibold text-slate-900 sm:text-lg">
+                  Remove Expense
+                </h2>
+                <p className="mt-2 text-sm text-slate-500 px-2">
+                  Are you sure you want to remove{" "}
+                  <span className="font-semibold text-slate-700">
+                    {deleteTarget.description}
+                  </span>
+                  ? This can&apos;t be undone.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 border-t border-slate-100 p-4 bg-slate-50/50 sm:p-6">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteExpense}
+                disabled={deleting}
+                className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? "Removing..." : "Remove"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
